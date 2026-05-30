@@ -1,0 +1,41 @@
+# Render Blueprint — deploys the Spider web server (and optionally the bot).
+# In the Render dashboard: New > Blueprint, point it at this repo. Then fill the
+# env vars marked sync:false in the dashboard (they're secrets).
+services:
+  - type: web
+    name: spider-web
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/me
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      - key: DISCORD_REDIRECT_URI
+        sync: false          # set to https://<your-render-url>/auth/callback
+      - key: SESSION_SECRET
+        generateValue: true  # Render generates a strong secret for you
+      - key: PUBLIC_URL
+        sync: false          # set to https://<your-render-url>
+
+  # Optional: the Discord bot as a background worker. Remove if you don't want it.
+  - type: worker
+    name: spider-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run bot
+    envVars:
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: PUBLIC_URL
+        sync: false

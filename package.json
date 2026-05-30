@@ -1,0 +1,19 @@
+{
+  "name": "freemodel-roblox",
+  "version": "1.0.0",
+  "description": "FreeModel-powered AI bridge: website + Roblox Studio plugin",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "bot": "node server/bot.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.4",
+    "express": "^4.19.2"
+  }
+}
