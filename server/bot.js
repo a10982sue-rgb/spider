@@ -24,9 +24,11 @@ import {
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
 // The bot can live in its OWN Discord application, separate from the one used
 // for website login. Its application id is taken from (in order): an explicit
-// DISCORD_BOT_CLIENT_ID, the shared DISCORD_CLIENT_ID, or — failing both —
-// decoded straight out of the bot token (the first dot-segment is the app id
-// in base64). So a separate bot "just works" with only DISCORD_BOT_TOKEN set.
+// DISCORD_BOT_CLIENT_ID, the id decoded from the bot token itself (always the
+// bot's real app), or — last resort — the shared DISCORD_CLIENT_ID.
+// The token-derived id MUST win over DISCORD_CLIENT_ID: when the bot and login
+// are different apps, registering to the login app's id throws 20012 ("not
+// authorized to perform this action on this application").
 function appIdFromToken(token) {
   try {
     return Buffer.from(String(token).split(".")[0], "base64").toString("utf8");
@@ -36,8 +38,8 @@ function appIdFromToken(token) {
 }
 const CLIENT_ID =
   process.env.DISCORD_BOT_CLIENT_ID ||
-  process.env.DISCORD_CLIENT_ID ||
-  (TOKEN ? appIdFromToken(TOKEN) : "");
+  (TOKEN ? appIdFromToken(TOKEN) : "") ||
+  process.env.DISCORD_CLIENT_ID;
 // Optional: register commands to one guild for INSTANT availability (global
 // commands can take up to an hour to propagate). Set to your server id.
 const GUILD_ID = process.env.DISCORD_GUILD_ID || "";
