@@ -77,7 +77,21 @@ Action types (one "type" field each):
      (backdoors, remote loadstring, obfuscated requires) are disabled/stripped or
      deleted before it lands. You don't need to scan it yourself.
 
-7. remember
+7. insert_free_audio
+   { "type": "insert_free_audio", "assetId": 1234567,   // a Roblox audio asset id
+     "parent": "Workspace.Part", "name": "Sound" }      // parent can be any instance
+   - Use when the user asks to add sound effects or music from the Roblox library.
+   - Creates a Sound instance with the SoundId set to the asset.
+   - If you only have a description: { "type": "insert_free_audio", "query": "explosion sound", "parent": "Workspace" }
+
+8. insert_free_animation
+   { "type": "insert_free_animation", "assetId": 1234567,  // a Roblox animation asset id
+     "parent": "Workspace.Humanoid", "name": "Dance" }     // parent should be a Humanoid or AnimationController
+   - Use when the user asks to add animations from the Roblox library.
+   - Creates an Animation instance with AnimationId set to the asset.
+   - If you only have a description: { "type": "insert_free_animation", "query": "dance animation", "parent": "Workspace.Character.Humanoid" }
+
+9. remember
    { "type": "remember", "text": "<a concise fact worth keeping long-term>" }
    - Use to save durable facts ACROSS conversations: what you built for this user,
      their preferences, names/paths of key systems, decisions you made. Saved
@@ -236,10 +250,21 @@ async function streamOnce({ apiKey, model, messages, onReason, think }) {
   return { content, reasoning, finishReason };
 }
 
-export async function runChat({ apiKey, model, history, thinkMode, context, mode, memory, onThinking, onStatus }) {
+export async function runChat({ apiKey, model, history, thinkMode, context, mode, memory, webSearch, onThinking, onStatus }) {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
   ];
+  // Web search capability
+  if (webSearch) {
+    messages.push({
+      role: "system",
+      content:
+        "WEB SEARCH ENABLED: You can search the web for current information when needed. " +
+        "If the user asks about recent events, current data, or anything requiring up-to-date " +
+        "information, mention in your 'thinking' that you would search for it. For Roblox-specific " +
+        "questions (APIs, best practices, asset IDs), web search can help find documentation and resources.",
+    });
+  }
   // Long-term memory: durable facts the user/AI saved across conversations.
   if (Array.isArray(memory) && memory.length) {
     const facts = memory

@@ -1,6 +1,6 @@
 const API = ""; // same origin as the server
 const $ = (id) => document.getElementById(id);
-const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", convoId: null };
+const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", webSearch: false, convoId: null };
 
 // ---- auth gate ------------------------------------------------------------
 // On load: ask who we are. Show the login screen until authenticated, then
@@ -72,12 +72,10 @@ function setCredits(n) {
       : "Describe what to build…  (Shift + Enter for a new line)";
 }
 
-// ---- step 1: key + session ------------------------------------------------
+// ---- step 1: session start (no API key needed) ----------------------------
 $("saveKey").addEventListener("click", async () => {
-  const apiKey = $("apiKey").value.trim();
   const model = $("model").value;
   const status = $("keyStatus");
-  if (!apiKey) { setStatus(status, "Enter your FreeModel API key first.", "err"); return; }
 
   setStatus(status, "Starting session…");
   try {
@@ -86,8 +84,8 @@ $("saveKey").addEventListener("click", async () => {
       state.linkId = s.linkId;
       showCode(s.code);
     }
-    await post("/api/session/config", { linkId: state.linkId, apiKey, model });
-    setStatus(status, "Saved. Now link the plugin →", "ok");
+    await post("/api/session/config", { linkId: state.linkId, model });
+    setStatus(status, "Session started. Now link the plugin →", "ok");
     unlock("step-link");
     startStatusPolling();
   } catch (e) {
@@ -136,6 +134,14 @@ $("modelBtn").addEventListener("click", () => {
       ? "Describe a model to create…  (e.g. a wooden cart, a sci-fi door)"
       : "Describe what to build…  (Shift + Enter for a new line)";
   }
+  $("chatInput").focus();
+});
+
+// Web search toggle
+$("webSearchBtn").addEventListener("click", () => {
+  state.webSearch = !state.webSearch;
+  $("webSearchBtn").setAttribute("aria-pressed", state.webSearch ? "true" : "false");
+  flash(state.webSearch ? "Web search enabled" : "Web search disabled");
   $("chatInput").focus();
 });
 
@@ -258,7 +264,7 @@ async function streamChat(message, attachments, thinkMode, { onThinking, onStatu
   const r = await fetch(API + "/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ linkId: state.linkId, message, attachments, thinkMode, mode: state.mode, convoId: state.convoId }),
+    body: JSON.stringify({ linkId: state.linkId, message, attachments, thinkMode, mode: state.mode, webSearch: state.webSearch, convoId: state.convoId }),
   });
   if (!r.ok || !r.body) {
     const data = await r.json().catch(() => ({}));

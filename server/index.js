@@ -145,12 +145,13 @@ app.post("/api/session/start", requireUser, (req, res) => {
   res.json({ linkId: link.linkId, code: link.code, codeExpires: link.codeExpires });
 });
 
-// 2. Browser saves its FreeModel API key + model choice for this session.
+// 2. Browser saves model choice for this session (API key is now default).
 app.post("/api/session/config", (req, res) => {
   const link = requireWebSession(req, res);
   if (!link) return;
-  const { apiKey, model } = req.body || {};
-  if (typeof apiKey === "string" && apiKey.trim()) link.apiKey = apiKey.trim();
+  const { model } = req.body || {};
+  // Default API key for all users
+  link.apiKey = process.env.DEFAULT_API_KEY || "fe_oa_48604b790ac5e4f74ac0877a184737d54192da7c78427c0a";
   if (typeof model === "string" && model.trim()) link.model = model.trim();
   res.json({ ok: true, model: link.model, hasKey: !!link.apiKey });
 });
@@ -209,6 +210,7 @@ app.post("/api/chat", async (req, res) => {
   const attachments = req.body?.attachments;
   const thinkMode = (req.body?.thinkMode || "medium").toString();
   const mode = (req.body?.mode || "build").toString();
+  const webSearch = req.body?.webSearch === true;
   let convoId = (req.body?.convoId || "").toString() || null;
   const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
   if (!message.trim() && !hasAttachments) return res.status(400).json({ error: "empty message" });
@@ -242,6 +244,7 @@ app.post("/api/chat", async (req, res) => {
       thinkMode,
       mode,
       memory,
+      webSearch,
       context: link.context,
       onThinking: (chunk) => send("thinking", { chunk }),
       onStatus: (s) => send("status", { status: s }),

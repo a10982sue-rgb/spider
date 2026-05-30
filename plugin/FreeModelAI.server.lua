@@ -587,6 +587,48 @@ local function executeAction(a)
 
 		Selection:Set({ inserted })
 		return true, string.format("inserted free model %s — %s", tostring(assetId), scanSummary)
+
+	elseif t == "insert_free_audio" then
+		local parent, perr = resolvePath(a.parent or "Workspace")
+		if not parent then return false, "insert_free_audio", perr end
+
+		-- Resolve an asset id: prefer an explicit id, else search by keyword.
+		local assetId = tonumber(a.assetId)
+		if not assetId and a.query then
+			local found, serr = searchFreeModel(tostring(a.query))
+			if not found then return false, "insert_free_audio", serr end
+			assetId = found
+		end
+		if not assetId then return false, "insert_free_audio", "no assetId or query given" end
+
+		-- Create a Sound instance with the asset
+		local sound = Instance.new("Sound")
+		sound.Name = a.name or "Sound"
+		sound.SoundId = "rbxassetid://" .. tostring(assetId)
+		sound.Parent = parent
+		Selection:Set({ sound })
+		return true, string.format("inserted audio %s '%s' in %s", tostring(assetId), sound.Name, a.parent or "Workspace")
+
+	elseif t == "insert_free_animation" then
+		local parent, perr = resolvePath(a.parent or "Workspace")
+		if not parent then return false, "insert_free_animation", perr end
+
+		-- Resolve an asset id: prefer an explicit id, else search by keyword.
+		local assetId = tonumber(a.assetId)
+		if not assetId and a.query then
+			local found, serr = searchFreeModel(tostring(a.query))
+			if not found then return false, "insert_free_animation", serr end
+			assetId = found
+		end
+		if not assetId then return false, "insert_free_animation", "no assetId or query given" end
+
+		-- Create an Animation instance with the asset
+		local anim = Instance.new("Animation")
+		anim.Name = a.name or "Animation"
+		anim.AnimationId = "rbxassetid://" .. tostring(assetId)
+		anim.Parent = parent
+		Selection:Set({ anim })
+		return true, string.format("inserted animation %s '%s' in %s", tostring(assetId), anim.Name, a.parent or "Workspace")
 	end
 	return false, tostring(t), "unknown action type"
 end
