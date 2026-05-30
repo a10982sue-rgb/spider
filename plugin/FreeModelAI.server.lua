@@ -16,7 +16,7 @@ local InsertService = game:GetService("InsertService")
 local SETTINGS_URL = "FreeModel_BackendUrl"
 local SETTINGS_TOKEN = "FreeModel_PluginToken"
 
-local backendUrl = plugin:GetSetting(SETTINGS_URL) or "http://localhost:3000"
+local backendUrl = (plugin:GetSetting(SETTINGS_URL) or "http://localhost:3000"):gsub("/+$", "")
 local pluginToken = plugin:GetSetting(SETTINGS_TOKEN) -- set after linking
 local polling = false
 
@@ -613,7 +613,10 @@ end
 -- Link / unlink
 -- ===========================================================================
 linkBtn.MouseButton1Click:Connect(function()
-	backendUrl = urlBox.Text:gsub("%s+$", "")
+	-- Normalize: strip surrounding whitespace and any trailing slashes, so
+	-- "https://host/" doesn't become "https://host//api/..." (a 404).
+	backendUrl = urlBox.Text:gsub("^%s+", ""):gsub("%s+$", ""):gsub("/+$", "")
+	urlBox.Text = backendUrl
 	plugin:SetSetting(SETTINGS_URL, backendUrl)
 
 	local code = codeBox.Text:gsub("%D", "")
