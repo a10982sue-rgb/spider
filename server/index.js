@@ -279,4 +279,12 @@ usersReady.then(() => {
   app.listen(PORT, () => {
     console.log(`FreeModel-Roblox bridge running on http://localhost:${PORT}`);
   });
+  // Run the Discord bot in-process too, unless explicitly told to run it as a
+  // separate service. This lets a single free Render web service host both the
+  // site and the bot (Render's free plan doesn't run standalone workers).
+  if (process.env.RUN_BOT !== "false" && process.env.DISCORD_BOT_TOKEN) {
+    import("./bot.js")
+      .then((m) => m.startBot())
+      .catch((e) => console.error("[bot] failed to start embedded:", e.message));
+  }
 });

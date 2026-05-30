@@ -1,4 +1,6 @@
-# Render Blueprint — deploys the Spider web server (and optionally the bot).
+# Render Blueprint — deploys the Spider web server, which ALSO runs the Discord
+# bot in-process (Render's free plan doesn't run standalone background workers,
+# so embedding the bot in the web service is what makes it work on free).
 # In the Render dashboard: New > Blueprint, point it at this repo. Then fill the
 # env vars marked sync:false in the dashboard (they're secrets).
 services:
@@ -22,29 +24,12 @@ services:
         generateValue: true  # Render generates a strong secret for you
       - key: PUBLIC_URL
         sync: false          # set to https://<your-render-url>
-      # Persistent credits — paste from a free Upstash Redis database.
-      - key: UPSTASH_REDIS_REST_URL
-        sync: false
-      - key: UPSTASH_REDIS_REST_TOKEN
-        sync: false
-
-  # Optional: the Discord bot as a background worker. Remove if you don't want it.
-  - type: worker
-    name: spider-bot
-    runtime: node
-    plan: free
-    buildCommand: npm install
-    startCommand: npm run bot
-    envVars:
+      # Discord bot — runs inside this web service (see startBot in index.js).
       - key: DISCORD_BOT_TOKEN
-        sync: false
-      - key: DISCORD_CLIENT_ID
         sync: false
       - key: ADMIN_IDS
         sync: false
-      - key: PUBLIC_URL
-        sync: false
-      # Same Upstash database as the web service, so credits stay in sync.
+      # Persistent credits — paste from a free Upstash Redis database.
       - key: UPSTASH_REDIS_REST_URL
         sync: false
       - key: UPSTASH_REDIS_REST_TOKEN

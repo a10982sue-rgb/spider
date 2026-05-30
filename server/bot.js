@@ -1,16 +1,21 @@
 // Spider Discord bot — credit management + login-link onboarding.
 //
-// Run separately from the web server:   npm run bot
+// Two ways to run:
+//   • Standalone:  npm run bot   (a dedicated process / Render worker)
+//   • Embedded:    the web server imports startBot() and runs it in-process,
+//     so a single free Render web service runs both the site and the bot.
+//
 // Requires env: DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID
 // Optional:     ADMIN_IDS (comma-separated Discord user ids allowed to grant),
 //               PUBLIC_URL (where the website is hosted, for the login link).
 //
-// It shares data/users.json with the web server, so credit changes are live.
+// It shares the user store with the web server, so credit changes are live.
 import {
   Client, GatewayIntentBits, Partials, REST, Routes,
   SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
   EmbedBuilder, PermissionFlagsBits,
 } from "discord.js";
+import { pathToFileURL } from "node:url";
 import {
   syncUser, grantCredits, setCredits, grantAll, allUsers, reloadAll,
   STARTING_CREDITS, ready as usersReady,
@@ -21,11 +26,6 @@ const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const PUBLIC_URL = (process.env.PUBLIC_URL || "http://localhost:3000").replace(/\/$/, "");
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
-
-if (!TOKEN || !CLIENT_ID) {
-  console.error("[bot] DISCORD_BOT_TOKEN and DISCORD_CLIENT_ID are required. See SETUP.md.");
-  process.exit(1);
-}
 
 const isAdmin = (i) =>
   ADMIN_IDS.includes(i.user.id) ||
@@ -236,7 +236,30 @@ client.on("messageCreate", async (msg) => {
   }).catch(() => {});
 });
 
-usersReady
-  .then(registerCommands)
-  .then(() => client.login(TOKEN))
-  .catch((e) => { console.error("[bot] startup failed:", e); process.exit(1); });
+// Start the bot. Safe to call from the web server (embedded) or standalone.
+// Returns true if it began logging in, false if no token is configured.
+let started = false;
+export async function startBot() {
+  if (started) return true;
+  if (!TOKEN || !CLIENT_ID) {
+    console.warn("[bot] DISCORD_BOT_TOKEN / DISCORD_CLIENT_ID not set — Discord bot disabled. See SETUP.md.");
+    return false;
+  }
+  started = true;
+  try {
+    await usersReady;
+    await registerCommands();
+    await client.login(TOKEN);
+    return true;
+  } catch (e) {
+    console.error("[bot] startup failed:", e);
+    return false;
+  }
+}
+
+// If run directly (`node server/bot.js` / `npm run bot`), start immediately and
+// treat a missing token as fatal. When imported, do nothing until startBot().
+const isMain = import.meta.url === pathToFileURL(process.argv[1] || "").href;
+if (isMain) {
+  startBot().then((ok) => { if (!ok) process.exit(1); });
+}
