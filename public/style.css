@@ -176,12 +176,17 @@ button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow
    ============================================================ */
 .main {
   display: flex; flex-direction: column; min-width: 0;
+  /* min-height:0 + overflow:hidden let the .chat area scroll instead of the
+     whole column growing past the viewport (which cut off old messages and the
+     composer as the chat got longer). The grid row gives .main its height. */
+  min-height: 0; overflow: hidden;
   background: radial-gradient(120% 80% at 50% -10%, rgba(91,140,255,0.06), transparent 60%);
   transition: opacity .3s;
 }
 .main.locked { opacity: .4; pointer-events: none; }
 
 .chat-head {
+  flex: none;
   padding: 18px 28px; border-bottom: 1px solid var(--line);
   display: flex; align-items: center; justify-content: space-between;
   backdrop-filter: blur(10px);
@@ -196,7 +201,7 @@ button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow
   background: rgba(69,212,131,0.1); border: 1px solid rgba(69,212,131,0.25);
 }
 
-.chat { flex: 1; overflow-y: auto; padding: 26px 28px; display: flex; flex-direction: column; gap: 14px; }
+.chat { flex: 1; min-height: 0; overflow-y: auto; padding: 26px 28px; display: flex; flex-direction: column; gap: 14px; }
 
 /* empty state */
 .empty { margin: auto; text-align: center; max-width: 460px; color: var(--dim); padding: 20px; }
@@ -266,7 +271,7 @@ button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow
 /* ============================================================
    COMPOSER
    ============================================================ */
-.composer { padding: 14px 20px 20px; }
+.composer { flex: none; padding: 14px 20px 20px; }
 .composer-inner {
   background: var(--panel); border: 1px solid var(--glass-brd);
   border-radius: var(--radius); padding: 12px; backdrop-filter: blur(14px);
