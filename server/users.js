@@ -170,7 +170,7 @@ export async function grantCredits(id, amount) {
   await refresh(id);
   const u = users.get(id);
   if (!u) return null;
-  u.credits += amount;
+  u.credits = Math.max(0, u.credits + amount); // clamp so removals can't go negative
   persist(id);
   return u.credits;
 }
@@ -183,6 +183,39 @@ export async function setCredits(id, amount) {
   u.credits = Math.max(0, amount);
   persist(id);
   return u.credits;
+}
+
+// Reload the full user set from Redis into the cache (no-op on file backend,
+// where the cache is already the whole store). Use before stats / bulk ops so
+// users created by another process (the web server) are included.
+export async function reloadAll() {
+  if (!redisEnabled) return;
+  try {
+    const flat = (await redisCmd(["HGETALL", REDIS_HASH])) || [];
+    const next = new Map();
+    for (let k = 0; k < flat.length; k += 2) {
+      try { next.set(flat[k], JSON.parse(flat[k + 1])); } catch {}
+    }
+    users = next;
+  } catch (e) {
+    console.error("[users] reloadAll failed:", e.message);
+  }
+}
+
+// Snapshot of all known users (cache view). Used by admin stats / bulk grant.
+export function allUsers() {
+  return [...users.values()];
+}
+
+// Add `amount` credits to EVERY known user. Returns how many were updated.
+export async function grantAll(amount) {
+  let n = 0;
+  for (const u of users.values()) {
+    u.credits = Math.max(0, u.credits + amount);
+    persist(u.id);
+    n++;
+  }
+  return n;
 }
 
 export function markIntroSeen(id) {

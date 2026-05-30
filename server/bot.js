@@ -12,7 +12,8 @@ import {
   EmbedBuilder, PermissionFlagsBits,
 } from "discord.js";
 import {
-  syncUser, grantCredits, setCredits, STARTING_CREDITS, ready as usersReady,
+  syncUser, grantCredits, setCredits, grantAll, allUsers, reloadAll,
+  STARTING_CREDITS, ready as usersReady,
 } from "./users.js";
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
@@ -31,7 +32,12 @@ const isAdmin = (i) =>
   i.memberPermissions?.has(PermissionFlagsBits.Administrator);
 
 // --- slash command definitions --------------------------------------------
+// A user option used by all the admin credit commands.
+const userOpt = (o) => o.setName("user").setDescription("Which user").setRequired(true);
+const amountOpt = (o, desc) => o.setName("amount").setDescription(desc).setRequired(true).setMinValue(1);
+
 const commands = [
+  // --- everyone ---
   new SlashCommandBuilder()
     .setName("mycredits")
     .setDescription("Check how many Spider generation credits you have left"),
@@ -40,25 +46,44 @@ const commands = [
     .setName("login")
     .setDescription("Get a link to log in and start building with Spider"),
 
+  // --- admin: flat credit commands (the ones you asked for) ---
   new SlashCommandBuilder()
-    .setName("credits")
-    .setDescription("Manage a user's Spider credits (admins only)")
-    .addSubcommand((s) =>
-      s.setName("check").setDescription("Check a user's credits")
-        .addUserOption((o) => o.setName("user").setDescription("Who").setRequired(true)))
-    .addSubcommand((s) =>
-      s.setName("grant").setDescription("Add credits to a user")
-        .addUserOption((o) => o.setName("user").setDescription("Who").setRequired(true))
-        .addIntegerOption((o) => o.setName("amount").setDescription("How many").setRequired(true)))
-    .addSubcommand((s) =>
-      s.setName("set").setDescription("Set a user's credits to an exact value")
-        .addUserOption((o) => o.setName("user").setDescription("Who").setRequired(true))
-        .addIntegerOption((o) => o.setName("amount").setDescription("Value").setRequired(true)))
-    .addSubcommand((s) =>
-      s.setName("reset").setDescription("Reset a user's credits to the starting amount")
-        .addUserOption((o) => o.setName("user").setDescription("Who").setRequired(true)))
-    .toJSON(),
-].map((c) => (c.toJSON ? c.toJSON() : c));
+    .setName("addcredits")
+    .setDescription("Add credits to a user (admins only)")
+    .addUserOption(userOpt)
+    .addIntegerOption((o) => amountOpt(o, "How many to add")),
+
+  new SlashCommandBuilder()
+    .setName("removecredits")
+    .setDescription("Remove credits from a user (admins only)")
+    .addUserOption(userOpt)
+    .addIntegerOption((o) => amountOpt(o, "How many to remove")),
+
+  new SlashCommandBuilder()
+    .setName("setcredits")
+    .setDescription("Set a user's credits to an exact value (admins only)")
+    .addUserOption(userOpt)
+    .addIntegerOption((o) => o.setName("amount").setDescription("Exact value").setRequired(true).setMinValue(0)),
+
+  new SlashCommandBuilder()
+    .setName("checkcredits")
+    .setDescription("Check another user's credits (admins only)")
+    .addUserOption(userOpt),
+
+  new SlashCommandBuilder()
+    .setName("resetcredits")
+    .setDescription("Reset a user's credits to the starting amount (admins only)")
+    .addUserOption(userOpt),
+
+  new SlashCommandBuilder()
+    .setName("grantall")
+    .setDescription("Give credits to EVERY registered user (admins only)")
+    .addIntegerOption((o) => amountOpt(o, "How many to add to everyone")),
+
+  new SlashCommandBuilder()
+    .setName("stats")
+    .setDescription("Show Spider usage stats (admins only)"),
+].map((c) => c.toJSON());
 
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -95,8 +120,10 @@ client.once("clientReady", (c) => {
 
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
+  const cmd = i.commandName;
   try {
-    if (i.commandName === "login") {
+    // ---- everyone ----
+    if (cmd === "login") {
       return i.reply({
         ephemeral: true,
         content:
@@ -106,7 +133,7 @@ client.on("interactionCreate", async (i) => {
       });
     }
 
-    if (i.commandName === "mycredits") {
+    if (cmd === "mycredits") {
       const u = await syncUser(i.user.id);
       if (!u) {
         return i.reply({
@@ -119,39 +146,79 @@ client.on("interactionCreate", async (i) => {
       return i.reply({ ephemeral: true, embeds: [creditsEmbed(u.globalName || u.username, u.credits)] });
     }
 
-    if (i.commandName === "credits") {
+    // ---- everything below is admin-only ----
+    const ADMIN_CMDS = ["addcredits", "removecredits", "setcredits", "checkcredits", "resetcredits", "grantall", "stats"];
+    if (ADMIN_CMDS.includes(cmd)) {
       if (!isAdmin(i)) {
-        return i.reply({ ephemeral: true, content: "⛔ Only admins can manage credits." });
+        return i.reply({ ephemeral: true, content: "⛔ Only admins can use this command." });
       }
-      const sub = i.options.getSubcommand();
+    }
+
+    // Bulk + stats don't take a target user.
+    if (cmd === "grantall") {
+      const amount = i.options.getInteger("amount");
+      await i.deferReply({ ephemeral: true }); // may touch many users
+      await reloadAll(); // make sure we have every user, not just cached ones
+      const n = await grantAll(amount);
+      return i.editReply(`✅ Added **${amount}** credits to **${n}** user(s).`);
+    }
+
+    if (cmd === "stats") {
+      await i.deferReply({ ephemeral: true });
+      await reloadAll();
+      const all = allUsers();
+      const total = all.reduce((s, u) => s + (u.credits || 0), 0);
+      const broke = all.filter((u) => (u.credits || 0) <= 0).length;
+      const top = [...all].sort((a, b) => b.credits - a.credits).slice(0, 5)
+        .map((u) => `• ${u.globalName || u.username}: **${u.credits}**`).join("\n") || "—";
+      const embed = new EmbedBuilder()
+        .setColor(0xff4d3d)
+        .setTitle("🕷️ Spider stats")
+        .addFields(
+          { name: "Registered users", value: String(all.length), inline: true },
+          { name: "Credits in circulation", value: String(total), inline: true },
+          { name: "Out of credits", value: String(broke), inline: true },
+          { name: "Top balances", value: top },
+        );
+      return i.editReply({ embeds: [embed] });
+    }
+
+    // The per-user admin commands all share a target lookup.
+    if (["addcredits", "removecredits", "setcredits", "checkcredits", "resetcredits"].includes(cmd)) {
       const target = i.options.getUser("user");
       const u = await syncUser(target.id);
+      const who = target.globalName || target.username;
       if (!u) {
-        return i.reply({ ephemeral: true, content: `${target.username} hasn't logged into Spider yet.` });
+        return i.reply({ ephemeral: true, content: `**${who}** hasn't logged into Spider yet, so they have no account.` });
       }
-      if (sub === "check") {
-        return i.reply({ ephemeral: true, embeds: [creditsEmbed(target.username, u.credits)] });
+      if (cmd === "checkcredits") {
+        return i.reply({ ephemeral: true, embeds: [creditsEmbed(who, u.credits)] });
       }
-      if (sub === "grant") {
+      if (cmd === "addcredits") {
         const amount = i.options.getInteger("amount");
         const now = await grantCredits(target.id, amount);
-        return i.reply({ ephemeral: true, content: `✅ Granted ${amount}. ${target.username} now has **${now}**.` });
+        return i.reply({ ephemeral: true, content: `✅ Added **${amount}**. ${who} now has **${now}** credits.` });
       }
-      if (sub === "set") {
+      if (cmd === "removecredits") {
+        const amount = i.options.getInteger("amount");
+        const now = await grantCredits(target.id, -amount); // clamped at 0 in the store
+        return i.reply({ ephemeral: true, content: `✅ Removed **${amount}**. ${who} now has **${now}** credits.` });
+      }
+      if (cmd === "setcredits") {
         const amount = i.options.getInteger("amount");
         const now = await setCredits(target.id, amount);
-        return i.reply({ ephemeral: true, content: `✅ Set ${target.username} to **${now}** credits.` });
+        return i.reply({ ephemeral: true, content: `✅ Set ${who} to **${now}** credits.` });
       }
-      if (sub === "reset") {
+      if (cmd === "resetcredits") {
         const now = await setCredits(target.id, STARTING_CREDITS);
-        return i.reply({ ephemeral: true, content: `✅ Reset ${target.username} to **${now}** credits.` });
+        return i.reply({ ephemeral: true, content: `✅ Reset ${who} to **${now}** credits.` });
       }
     }
   } catch (e) {
     console.error("[bot] interaction error:", e);
-    if (!i.replied && !i.deferred) {
-      i.reply({ ephemeral: true, content: "Something went wrong handling that." }).catch(() => {});
-    }
+    const msg = { ephemeral: true, content: "Something went wrong handling that." };
+    if (i.deferred) i.editReply(msg.content).catch(() => {});
+    else if (!i.replied) i.reply(msg).catch(() => {});
   }
 });
 

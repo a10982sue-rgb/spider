@@ -122,11 +122,15 @@ so local development needs no setup.
 - Each user starts with **20**. A credit is spent per successful generation
   (website chat *or* the in-Studio plugin chat — they share one pool).
 - Stored in `data/users.json` (created automatically; safe to back up).
-- Admins manage credits from Discord:
-  - `/credits check @user`
-  - `/credits grant @user 20`
-  - `/credits set @user 100`
-  - `/credits reset @user`   (back to 20)
+- Admins manage credits from Discord (admin = a Discord id in `ADMIN_IDS`, or
+  anyone with the server Administrator permission):
+  - `/addcredits user:@user amount:20` — add credits
+  - `/removecredits user:@user amount:5` — remove credits (won't go below 0)
+  - `/setcredits user:@user amount:100` — set an exact amount
+  - `/checkcredits user:@user` — see someone's balance
+  - `/resetcredits user:@user` — back to the starting 20
+  - `/grantall amount:10` — give credits to **every** registered user
+  - `/stats` — totals, how many are out of credits, top balances
   - Users check their own with `/mycredits`, or DM the bot for a login link.
 
 ## Notes
