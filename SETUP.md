@@ -12,8 +12,18 @@ credits**. This guide gets both the website login and the Discord bot running.
      (use your real domain in production, e.g. `https://yourdomain.com/auth/callback`).
 3. **Bot** (only needed for the Discord bot)
    - Click **Add Bot**, then **Reset Token** and copy the **Bot Token**.
+   - Turn ON **Message Content Intent** (under Privileged Gateway Intents) so DM
+     onboarding works.
    - Invite the bot to your server: **OAuth2 → URL Generator**, scope `bot` +
      `applications.commands`, then open the generated URL.
+
+> **Using a SEPARATE bot for the commands?** That's fully supported — login and
+> the bot don't have to live in the same Discord application. Make a second
+> application, add a Bot to it, and just set its `DISCORD_BOT_TOKEN`. The bot
+> figures out its own application id from the token, so you don't need to set
+> `DISCORD_CLIENT_ID` for it (the website keeps using its own Client ID for
+> login). If you ever want to be explicit, set `DISCORD_BOT_CLIENT_ID` to the
+> bot app's id. Invite that second app to your server with the same scopes.
 
 ## 2. Configure environment variables
 

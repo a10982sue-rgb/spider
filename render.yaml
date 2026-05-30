@@ -25,9 +25,13 @@ services:
       - key: PUBLIC_URL
         sync: false          # set to https://<your-render-url>
       # Discord bot — runs inside this web service (see startBot in index.js).
+      # Can be a SEPARATE Discord app from login; just set its token here.
       - key: DISCORD_BOT_TOKEN
         sync: false
       - key: ADMIN_IDS
+        sync: false
+      # Optional: set to your server id for instant slash-command registration.
+      - key: DISCORD_GUILD_ID
         sync: false
       # Persistent credits — paste from a free Upstash Redis database.
       - key: UPSTASH_REDIS_REST_URL

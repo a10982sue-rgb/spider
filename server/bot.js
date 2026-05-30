@@ -22,7 +22,25 @@ import {
 } from "./users.js";
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
-const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+// The bot can live in its OWN Discord application, separate from the one used
+// for website login. Its application id is taken from (in order): an explicit
+// DISCORD_BOT_CLIENT_ID, the shared DISCORD_CLIENT_ID, or — failing both —
+// decoded straight out of the bot token (the first dot-segment is the app id
+// in base64). So a separate bot "just works" with only DISCORD_BOT_TOKEN set.
+function appIdFromToken(token) {
+  try {
+    return Buffer.from(String(token).split(".")[0], "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+const CLIENT_ID =
+  process.env.DISCORD_BOT_CLIENT_ID ||
+  process.env.DISCORD_CLIENT_ID ||
+  (TOKEN ? appIdFromToken(TOKEN) : "");
+// Optional: register commands to one guild for INSTANT availability (global
+// commands can take up to an hour to propagate). Set to your server id.
+const GUILD_ID = process.env.DISCORD_GUILD_ID || "";
 const PUBLIC_URL = (process.env.PUBLIC_URL || "http://localhost:3000").replace(/\/$/, "");
 const ADMIN_IDS = (process.env.ADMIN_IDS || "")
   .split(",").map((s) => s.trim()).filter(Boolean);
@@ -86,9 +104,20 @@ const commands = [
 ].map((c) => c.toJSON());
 
 async function registerCommands() {
+  if (!CLIENT_ID) {
+    console.warn("[bot] could not determine application id — skipping command registration.");
+    return;
+  }
   const rest = new REST({ version: "10" }).setToken(TOKEN);
-  await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-  console.log("[bot] slash commands registered");
+  if (GUILD_ID) {
+    // Guild-scoped: appears in your server immediately.
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    console.log(`[bot] slash commands registered to guild ${GUILD_ID} (instant)`);
+  } else {
+    // Global: works everywhere, but can take up to an hour to show up the first time.
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    console.log("[bot] global slash commands registered (may take up to ~1h to appear)");
+  }
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -241,8 +270,8 @@ client.on("messageCreate", async (msg) => {
 let started = false;
 export async function startBot() {
   if (started) return true;
-  if (!TOKEN || !CLIENT_ID) {
-    console.warn("[bot] DISCORD_BOT_TOKEN / DISCORD_CLIENT_ID not set — Discord bot disabled. See SETUP.md.");
+  if (!TOKEN) {
+    console.warn("[bot] DISCORD_BOT_TOKEN not set — Discord bot disabled. See SETUP.md.");
     return false;
   }
   started = true;
