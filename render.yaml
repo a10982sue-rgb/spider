@@ -22,6 +22,11 @@ services:
         generateValue: true  # Render generates a strong secret for you
       - key: PUBLIC_URL
         sync: false          # set to https://<your-render-url>
+      # Persistent credits — paste from a free Upstash Redis database.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
 
   # Optional: the Discord bot as a background worker. Remove if you don't want it.
   - type: worker
@@ -38,4 +43,9 @@ services:
       - key: ADMIN_IDS
         sync: false
       - key: PUBLIC_URL
+        sync: false
+      # Same Upstash database as the web service, so credits stay in sync.
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
         sync: false

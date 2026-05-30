@@ -154,7 +154,7 @@ export function registerAuthRoutes(app) {
       if (!meRes.ok) throw new Error(`identity fetch failed (${meRes.status})`);
       const me = await meRes.json();
 
-      const user = upsertUser({
+      const user = await upsertUser({
         id: me.id,
         username: me.username,
         globalName: me.global_name,

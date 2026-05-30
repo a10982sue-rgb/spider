@@ -95,14 +95,27 @@ Heroku-style) to make this easy.
 > Set `NODE_ENV=production` (the blueprint does this) so the session cookie is
 > marked `Secure`. The app binds `process.env.PORT` automatically.
 
-### ⚠ Credit persistence on free hosts
+### Make credits permanent (free Upstash Redis)
 
-Credits live in `data/users.json` on the local disk. Render/Railway **free**
-tiers have *ephemeral* disks — that file resets on every redeploy/restart, so
-everyone's credits go back to 20. To keep credits permanently, attach a
-persistent disk/volume mounted at `data/` (Render: add a Disk with mount path
-`/opt/render/project/src/data`; Railway: add a Volume mounted at `.../data`), or
-move the store to a database. For testing, the ephemeral default is fine.
+Credits live in `data/users.json` on local disk. On free hosts (Render/Railway)
+that disk is **ephemeral** — it resets on every redeploy, so everyone's credits
+go back to 20. To keep them forever, point Spider at a free Upstash Redis
+database (no code change, no paid plan):
+
+1. Go to <https://upstash.com> → sign up → **Create Database** (Redis). Pick a
+   region near your host. The free tier is plenty.
+2. On the database page, find the **REST API** section and copy:
+   - `UPSTASH_REDIS_REST_URL`
+   - `UPSTASH_REDIS_REST_TOKEN`
+3. Add both as environment variables on **both** your Render services (the web
+   service *and* the bot worker — they share one store so credits stay in sync).
+4. Redeploy. On boot you'll see `[users] loaded N user(s) from Upstash Redis` in
+   the logs. Credits now survive redeploys, and the bot's `/credits grant` shows
+   up on the website immediately.
+
+When these vars aren't set, Spider automatically falls back to the local file —
+so local development needs no setup.
+
 
 ## Credits
 

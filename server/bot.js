@@ -12,7 +12,7 @@ import {
   EmbedBuilder, PermissionFlagsBits,
 } from "discord.js";
 import {
-  getUser, grantCredits, setCredits, STARTING_CREDITS,
+  syncUser, grantCredits, setCredits, STARTING_CREDITS, ready as usersReady,
 } from "./users.js";
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN;
@@ -107,7 +107,7 @@ client.on("interactionCreate", async (i) => {
     }
 
     if (i.commandName === "mycredits") {
-      const u = getUser(i.user.id);
+      const u = await syncUser(i.user.id);
       if (!u) {
         return i.reply({
           ephemeral: true,
@@ -125,7 +125,7 @@ client.on("interactionCreate", async (i) => {
       }
       const sub = i.options.getSubcommand();
       const target = i.options.getUser("user");
-      const u = getUser(target.id);
+      const u = await syncUser(target.id);
       if (!u) {
         return i.reply({ ephemeral: true, content: `${target.username} hasn't logged into Spider yet.` });
       }
@@ -134,16 +134,16 @@ client.on("interactionCreate", async (i) => {
       }
       if (sub === "grant") {
         const amount = i.options.getInteger("amount");
-        const now = grantCredits(target.id, amount);
+        const now = await grantCredits(target.id, amount);
         return i.reply({ ephemeral: true, content: `✅ Granted ${amount}. ${target.username} now has **${now}**.` });
       }
       if (sub === "set") {
         const amount = i.options.getInteger("amount");
-        const now = setCredits(target.id, amount);
+        const now = await setCredits(target.id, amount);
         return i.reply({ ephemeral: true, content: `✅ Set ${target.username} to **${now}** credits.` });
       }
       if (sub === "reset") {
-        const now = setCredits(target.id, STARTING_CREDITS);
+        const now = await setCredits(target.id, STARTING_CREDITS);
         return i.reply({ ephemeral: true, content: `✅ Reset ${target.username} to **${now}** credits.` });
       }
     }
@@ -169,6 +169,7 @@ client.on("messageCreate", async (msg) => {
   }).catch(() => {});
 });
 
-registerCommands()
+usersReady
+  .then(registerCommands)
   .then(() => client.login(TOKEN))
   .catch((e) => { console.error("[bot] startup failed:", e); process.exit(1); });

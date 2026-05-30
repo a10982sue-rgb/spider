@@ -9,7 +9,7 @@ import { runChat } from "./ai.js";
 import {
   registerAuthRoutes, requireUser, currentUser, authConfigured,
 } from "./auth.js";
-import { spendCredit, markIntroSeen, publicUser, getUser } from "./users.js";
+import { spendCredit, markIntroSeen, publicUser, getUser, syncUser, ready as usersReady } from "./users.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -32,9 +32,11 @@ registerAuthRoutes(app);
 // === AUTH / ACCOUNT ========================================================
 
 // Who am I? Frontend calls this on load to decide login vs app.
-app.get("/api/me", (req, res) => {
+app.get("/api/me", async (req, res) => {
   const u = currentUser(req);
-  res.json({ authConfigured, user: publicUser(u) });
+  // Pull the freshest credit count from shared storage (bot may have changed it).
+  if (u) await syncUser(u.id);
+  res.json({ authConfigured, user: publicUser(currentUser(req)) });
 });
 
 // Mark the onboarding intro as seen so it doesn't show again.
@@ -187,7 +189,7 @@ app.post("/api/chat", async (req, res) => {
     link.history.push({ role: "assistant", content: reply });
     const queuedIds = actions.length ? queueActions(link, actions) : [];
     // Charge one credit for the successful generation.
-    const { credits } = spendCredit(user.id);
+    const { credits } = await spendCredit(user.id);
     send("done", {
       thinking, reply, actions, queued: queuedIds.length,
       truncated, salvaged, credits,
@@ -261,7 +263,7 @@ app.post("/api/plugin/chat", async (req, res) => {
     link.history.push({ role: "assistant", content: reply });
     const queued = actions.length ? queueActions(link, actions) : [];
     let credits;
-    if (owner) credits = spendCredit(owner.id).credits;
+    if (owner) credits = (await spendCredit(owner.id)).credits;
     res.json({ thinking, reply, actions, queued: queued.length, credits });
   } catch (err) {
     res.status(502).json({ error: String(err.message || err) });
@@ -272,6 +274,9 @@ app.post("/api/plugin/chat", async (req, res) => {
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`FreeModel-Roblox bridge running on http://localhost:${PORT}`);
+// Wait for the user store (Redis or file) to load before accepting traffic.
+usersReady.then(() => {
+  app.listen(PORT, () => {
+    console.log(`FreeModel-Roblox bridge running on http://localhost:${PORT}`);
+  });
 });
