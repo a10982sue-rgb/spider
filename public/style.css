@@ -296,8 +296,8 @@ button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow
 }
 .composer textarea:focus { box-shadow: none; background: transparent; }
 
-.composer-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
-.composer-tools { display: flex; align-items: center; gap: 9px; }
+.composer-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+.composer-tools { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; min-width: 0; }
 .icon-btn {
   display: grid; place-items: center;
   background: rgba(0,0,0,0.3); border: 1px solid var(--line); border-radius: 10px;
@@ -319,9 +319,12 @@ button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow
   font-size: 13px; font-weight: 500; color: var(--text); cursor: pointer;
 }
 .think-select select:focus { box-shadow: none; }
-.send {
-  display: flex; align-items: center; gap: 8px;
+/* Higher specificity than `button.primary` so width:100%/margin-top don't win
+   and stretch the send button full-width. */
+button.primary.send {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
   width: auto; margin-top: 0; flex: none; padding: 0 22px; height: 40px;
+  white-space: nowrap;
 }
 
 /* ============================================================
@@ -437,7 +440,7 @@ button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow
 
 /* Model-mode toggle in the composer */
 .mode-btn {
-  display: flex; align-items: center; gap: 7px;
+  display: flex; align-items: center; gap: 7px; flex: none;
   background: rgba(0,0,0,0.3); border: 1px solid var(--line); color: var(--dim);
   height: 40px; padding: 0 14px; border-radius: 10px; font-size: 13px; font-weight: 600;
   transition: border-color .2s, color .2s, background .2s, box-shadow .2s;
