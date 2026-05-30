@@ -189,8 +189,22 @@ local function captureSnapshot()
 	local out = {}
 	local nodes = 0
 	local truncated = false
+	local sourceFailures = 0  -- scripts whose .Source we couldn't read (permission)
+	local sourcesRead = 0
 
 	local function indent(d) return string.rep("  ", d) end
+
+	-- Read a script's source, capped. Returns (text, ok). ok=false means the
+	-- read errored — almost always the plugin lacking script-injection rights.
+	local function readSource(scriptInst)
+		local ok, src = pcall(function() return scriptInst.Source end)
+		if not ok then return nil, false end
+		src = src or ""
+		if #src > MAX_SCRIPT_CHARS then
+			src = src:sub(1, MAX_SCRIPT_CHARS) .. "\n-- […source truncated…]"
+		end
+		return src, true
+	end
 
 	local function walk(inst, depth)
 		if truncated then return end
@@ -201,15 +215,17 @@ local function captureSnapshot()
 
 			-- Inline the full source of any script so the AI can read/fix it.
 			if child:IsA("LuaSourceContainer") then
-				local ok, src = pcall(function() return child.Source end)
-				src = (ok and src) or ""
-				if #src > MAX_SCRIPT_CHARS then
-					src = src:sub(1, MAX_SCRIPT_CHARS) .. "\n-- […source truncated…]"
-				end
+				local src, ok = readSource(child)
 				table.insert(out, string.format('%s  source of %s:', indent(depth), instancePath(child)))
-				table.insert(out, "```lua")
-				table.insert(out, src)
-				table.insert(out, "```")
+				if ok then
+					sourcesRead += 1
+					table.insert(out, "```lua")
+					table.insert(out, src)
+					table.insert(out, "```")
+				else
+					sourceFailures += 1
+					table.insert(out, "  [source unavailable — Script Injection permission not granted]")
+				end
 			end
 
 			if depth < MAX_DEPTH then walk(child, depth + 1) end
@@ -224,25 +240,55 @@ local function captureSnapshot()
 		end
 	end
 
-	-- What the user has selected right now — the AI should focus here.
+	-- What the user has selected right now — the AI should focus here. For a
+	-- selected script, inline its full source directly so it's front and centre.
 	local sel = Selection:Get()
 	if #sel > 0 then
 		table.insert(out, "\n## Currently selected in Studio")
 		for _, inst in ipairs(sel) do
 			table.insert(out, string.format("- %s (%s)", instancePath(inst), inst.ClassName))
+			if inst:IsA("LuaSourceContainer") then
+				local src, ok = readSource(inst)
+				if ok then
+					table.insert(out, "```lua")
+					table.insert(out, src)
+					table.insert(out, "```")
+				else
+					sourceFailures += 1
+					table.insert(out, "  [source unavailable — Script Injection permission not granted]")
+				end
+			end
 		end
+	end
+
+	-- If we couldn't read ANY script sources, the plugin is almost certainly
+	-- missing the Script Injection permission. Put a loud banner at the very top
+	-- so the AI (and the user, via the log) knows why scripts look empty.
+	if sourceFailures > 0 and sourcesRead == 0 then
+		table.insert(out, 1,
+			"⚠ IMPORTANT: I could not read ANY script sources from this place. The " ..
+			"Spider plugin needs the 'Script Injection' permission (also called " ..
+			"'Allow script modification'). Tell the user to enable it: Studio → the " ..
+			"plugin's permission shield / Plugins tab → allow script injection, then " ..
+			"re-link. Until then you cannot see or edit script contents.\n")
 	end
 
 	if truncated then
 		table.insert(out, "\n[snapshot truncated: place is very large]")
 	end
-	return table.concat(out, "\n")
+	return table.concat(out, "\n"), sourceFailures, sourcesRead
 end
 
 -- Push the current snapshot to the server. Returns ok, err.
+local warnedNoScriptPerm = false
 local function pushContext()
 	if not pluginToken then return false, "not linked" end
-	local snapshot = captureSnapshot()
+	local snapshot, sourceFailures, sourcesRead = captureSnapshot()
+	-- Warn once in the log if we can't read any script sources (permission).
+	if sourceFailures and sourceFailures > 0 and (sourcesRead or 0) == 0 and not warnedNoScriptPerm then
+		warnedNoScriptPerm = true
+		logLine("⚠ Can't read script sources — enable the plugin's Script Injection permission, then re-link.", Color3.fromRGB(255, 196, 84))
+	end
 	local data, err = request("POST", "/api/context", { context = snapshot })
 	return data ~= nil, err
 end

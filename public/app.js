@@ -146,15 +146,29 @@ $("fileInput").addEventListener("change", (e) => {
   e.target.value = ""; // allow re-selecting the same file
 });
 
-// Allow pasting an image straight into the input.
+// Pasting: images become attachments; a large blob of text (e.g. a pasted
+// script) becomes a file attachment instead of flooding the input box.
+const PASTE_AS_FILE_CHARS = 600; // longer than this -> attach instead of inline
 $("chatInput").addEventListener("paste", (e) => {
-  for (const item of e.clipboardData?.items || []) {
+  const items = e.clipboardData?.items || [];
+  for (const item of items) {
     if (item.type.startsWith("image/")) {
+      e.preventDefault();
       const f = item.getAsFile();
       if (f) addAttachment(f);
+      return;
     }
   }
+  const text = e.clipboardData?.getData("text/plain") || "";
+  const looksLikeCode = /\n/.test(text) && /[{};()=]|local |function |end\b/.test(text);
+  if (text.length > PASTE_AS_FILE_CHARS && looksLikeCode) {
+    e.preventDefault();
+    const blob = new File([text], `pasted-${pasteCount++}.lua`, { type: "text/plain" });
+    addAttachment(blob);
+    flash("Pasted script attached as a file so it doesn't fill the box.");
+  }
 });
+let pasteCount = 1;
 
 const MAX_FILE = 18 * 1024 * 1024; // 18MB
 function addAttachment(file) {
