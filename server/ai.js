@@ -77,10 +77,27 @@ Action types (one "type" field each):
      (backdoors, remote loadstring, obfuscated requires) are disabled/stripped or
      deleted before it lands. You don't need to scan it yourself.
 
+7. remember
+   { "type": "remember", "text": "<a concise fact worth keeping long-term>" }
+   - Use to save durable facts ACROSS conversations: what you built for this user,
+     their preferences, names/paths of key systems, decisions you made. Saved
+     facts are shown back to you at the top of every future chat.
+   - Remember sparingly and concretely (e.g. "Built a basketball game with a
+     ServerScriptService.Hoop scoring script and a StarterGui scoreboard").
+     Don't remember trivia or anything the user asked you to forget.
+
 Guidelines:
-- ALWAYS consult the place snapshot first. To fix a bug, locate the offending
-  script in the snapshot, read its source, and emit edit_script with the full
-  corrected source. To modify an instance you can see, use set_property.
+- ALWAYS consult the place snapshot first. The snapshot includes the FULL source
+  of every Script/LocalScript/ModuleScript and the whole instance tree. When you
+  need to find something — a function, a remote, a variable, a part, where a bug
+  lives — SEARCH the snapshot's script sources and instance tree yourself and
+  read what's actually there. Cite the exact path (e.g. ServerScriptService.Main)
+  in your thinking. Do NOT ask the user where something is or what a script says
+  if it is present in the snapshot — find it. Only ask the user when the
+  information genuinely isn't anywhere in the snapshot.
+- To fix a bug, locate the offending script in the snapshot, read its source, and
+  emit edit_script with the full corrected source. To modify an instance you can
+  see, use set_property.
 - To MODEL something from scratch (a car, a house, a sword), BUILD it out of
   create_instance parts/meshes grouped under one Model (create the Model first
   with create_instance className "Model", then parent parts to it by path). Use
@@ -219,10 +236,25 @@ async function streamOnce({ apiKey, model, messages, onReason, think }) {
   return { content, reasoning, finishReason };
 }
 
-export async function runChat({ apiKey, model, history, thinkMode, context, mode, onThinking, onStatus }) {
+export async function runChat({ apiKey, model, history, thinkMode, context, mode, memory, onThinking, onStatus }) {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
   ];
+  // Long-term memory: durable facts the user/AI saved across conversations.
+  if (Array.isArray(memory) && memory.length) {
+    const facts = memory
+      .map((m) => `- ${typeof m === "string" ? m : m.text}`)
+      .filter((l) => l.length > 2)
+      .join("\n");
+    if (facts) {
+      messages.push({
+        role: "system",
+        content:
+          "Long-term memory — durable facts about this user and what you've built " +
+          "for them in past conversations. Use these for continuity:\n\n" + facts,
+      });
+    }
+  }
   // "Model" mode (the Model button): focus the build on one self-contained Model.
   if (mode === "model") {
     messages.push({

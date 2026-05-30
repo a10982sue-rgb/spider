@@ -451,3 +451,82 @@ button.primary.send {
   background: var(--grad-blue);
   box-shadow: 0 6px 18px -6px rgba(91,140,255,0.7);
 }
+
+/* ============================================================
+   HEADER ACTIONS (new chat / history / memory)
+   ============================================================ */
+.head-actions { display: flex; align-items: center; gap: 9px; }
+.head-btn {
+  background: rgba(255,255,255,0.04); border: 1px solid var(--line); color: var(--dim);
+  padding: 7px 12px; border-radius: 10px; font-size: 12.5px; font-weight: 600;
+  white-space: nowrap; transition: border-color .2s, color .2s, background .2s;
+}
+.head-btn:hover { color: var(--text); border-color: rgba(91,140,255,0.6); background: rgba(91,140,255,0.08); }
+
+/* ============================================================
+   DRAWERS (history + memory slide-overs)
+   ============================================================ */
+.drawer-scrim {
+  position: fixed; inset: 0; z-index: 30;
+  background: rgba(4,6,11,0.55); backdrop-filter: blur(2px);
+  animation: fade .2s ease;
+}
+.drawer {
+  position: fixed; top: 0; right: 0; z-index: 31;
+  width: 380px; max-width: 92vw; height: 100vh;
+  background: linear-gradient(180deg, rgba(16,20,29,0.98), rgba(9,12,18,0.98));
+  border-left: 1px solid var(--glass-brd);
+  box-shadow: -20px 0 60px -20px rgba(0,0,0,0.7);
+  padding: 22px; display: flex; flex-direction: column; gap: 6px;
+  animation: slideIn .26s cubic-bezier(.2,.7,.3,1);
+  overflow: hidden;
+}
+@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; }
+.drawer-head h3 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -0.3px; }
+.drawer-x {
+  background: transparent; border: 1px solid var(--line); color: var(--dim);
+  width: 30px; height: 30px; border-radius: 9px; font-size: 13px;
+  transition: color .2s, border-color .2s;
+}
+.drawer-x:hover { color: var(--err); border-color: rgba(255,90,82,0.5); }
+.drawer-hint { color: var(--dim); font-size: 12.5px; line-height: 1.5; margin: 2px 0 12px; }
+.drawer-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 9px; padding-right: 4px; }
+.drawer-empty { color: var(--faint); font-size: 13px; text-align: center; margin-top: 30px; }
+
+/* history items */
+.histo {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--glass-brd);
+  border-radius: 12px; padding: 12px 13px; cursor: pointer;
+  transition: border-color .2s, transform .12s, background .2s;
+}
+.histo:hover { border-color: rgba(91,140,255,0.55); transform: translateY(-1px); background: var(--panel-2); }
+.histo.active { border-color: rgba(255,138,61,0.6); }
+.histo-body { flex: 1; min-width: 0; }
+.histo-title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.histo-meta { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+.histo-del {
+  flex: none; background: transparent; border: 0; color: var(--faint);
+  font-size: 14px; padding: 4px 6px; border-radius: 7px;
+  transition: color .2s, background .2s;
+}
+.histo-del:hover { color: var(--err); background: rgba(255,90,82,0.1); }
+
+/* memory items */
+.mem-add { display: flex; gap: 8px; margin-bottom: 13px; }
+.mem-add input { flex: 1; }
+.mem-add .primary { width: auto; margin-top: 0; flex: none; padding: 0 16px; height: 42px; }
+.memo {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: var(--panel); border: 1px solid var(--glass-brd);
+  border-radius: 12px; padding: 11px 13px; font-size: 13px; line-height: 1.5;
+}
+.memo-text { flex: 1; color: var(--text); }
+.memo-del {
+  flex: none; background: transparent; border: 0; color: var(--faint);
+  font-size: 14px; padding: 2px 5px; border-radius: 7px; cursor: pointer;
+  transition: color .2s, background .2s;
+}
+.memo-del:hover { color: var(--err); background: rgba(255,90,82,0.1); }
+.remember-tag { display: block; margin-top: 7px; font-size: 11px; color: #8b9bff; }

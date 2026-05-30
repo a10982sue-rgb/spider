@@ -127,7 +127,23 @@ To change existing code it emits an `edit_script` action that replaces the
 script's full source; to tweak an instance it can see, it uses `set_property`.
 The snapshot refreshes automatically — after every build, when you send a chat,
 and on a periodic poll that picks up edits you made by hand. Very large places
-are capped (per-script and total) so the context stays manageable.
+are capped (per-script and total) so the context stays manageable. The AI is
+told to **search the snapshot** (script sources + instance tree) to find things
+itself rather than asking you where code lives.
+
+### Chat history & memory
+
+Everything is tied to your Discord login, so it follows you across devices and
+survives restarts:
+
+- **History** — every conversation is saved per user. Hit **History** in the
+  chat header to browse past chats and reopen one; **＋ New** starts a fresh
+  thread. (Backed by Redis when configured, a local file otherwise.)
+- **Memory** — durable facts Spider keeps across *all* your chats: what it built,
+  paths of key systems, your preferences. The AI saves these itself with a
+  `remember` action (you'll see a "🧠 Remembered…" note), and you can view, add,
+  or delete them from the **Memory** panel. Saved facts are injected at the top
+  of every future chat for continuity.
 
 ### Insert free models (auto virus-scanned)
 

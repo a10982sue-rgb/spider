@@ -1,6 +1,6 @@
 const API = ""; // same origin as the server
 const $ = (id) => document.getElementById(id);
-const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build" };
+const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", convoId: null };
 
 // ---- auth gate ------------------------------------------------------------
 // On load: ask who we are. Show the login screen until authenticated, then
@@ -221,11 +221,12 @@ $("chatForm").addEventListener("submit", async (e) => {
     await streamChat(text, atts, $("thinkMode").value, {
       onThinking: (chunk) => think.append(chunk),
       onStatus: (s) => statusEl.set(s),
-      onDone: ({ reply, queued, thinking, truncated, salvaged, credits }) => {
+      onDone: ({ reply, queued, thinking, truncated, salvaged, credits, convoId, remembered }) => {
         think.finish(thinking);
         statusEl.remove();
-        addMsg("ai", reply, queued, null, { truncated, salvaged });
+        addMsg("ai", reply, queued, null, { truncated, salvaged, remembered });
         if (credits !== undefined) setCredits(credits);
+        if (convoId) state.convoId = convoId;
       },
       onError: (msg) => { think.remove(); statusEl.remove(); addMsg("sys", "Error: " + msg); },
     });
@@ -243,7 +244,7 @@ async function streamChat(message, attachments, thinkMode, { onThinking, onStatu
   const r = await fetch(API + "/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ linkId: state.linkId, message, attachments, thinkMode, mode: state.mode }),
+    body: JSON.stringify({ linkId: state.linkId, message, attachments, thinkMode, mode: state.mode, convoId: state.convoId }),
   });
   if (!r.ok || !r.body) {
     const data = await r.json().catch(() => ({}));
@@ -321,6 +322,11 @@ function addMsg(kind, text, queued, attachments, meta) {
     w.textContent = "⚠ Recovered a malformed response; some actions may be missing.";
     div.appendChild(w);
   }
+  if (meta && Array.isArray(meta.remembered) && meta.remembered.length) {
+    const r = document.createElement("span"); r.className = "remember-tag";
+    r.textContent = "🧠 Remembered: " + meta.remembered.join("; ");
+    div.appendChild(r);
+  }
   $("chat").appendChild(div);
   $("chat").scrollTop = $("chat").scrollHeight;
 }
@@ -373,6 +379,124 @@ function unlock(id) { $(id).classList.remove("locked"); }
 function setStatus(el, msg, cls) { el.textContent = msg; el.className = "status" + (cls ? " " + cls : ""); }
 function flash(msg) { const s = $("keyStatus"); setStatus(s, msg, "err"); setTimeout(() => setStatus(s, ""), 4000); }
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+
+// ---- drawers (history + memory) -------------------------------------------
+function openDrawer(id) { $(id).hidden = false; $("drawerScrim").hidden = false; }
+function closeDrawers() {
+  $("historyDrawer").hidden = true;
+  $("memoryDrawer").hidden = true;
+  $("drawerScrim").hidden = true;
+}
+$("drawerScrim").addEventListener("click", closeDrawers);
+document.querySelectorAll("[data-close]").forEach((b) =>
+  b.addEventListener("click", () => { $(b.dataset.close).hidden = true; $("drawerScrim").hidden = true; })
+);
+
+// New chat: clear the transcript and start a fresh conversation on next send.
+$("newChatBtn").addEventListener("click", () => {
+  state.convoId = null;
+  $("chat").innerHTML = "";
+  addMsg("sys", "Started a new chat.");
+  input.focus();
+});
+
+// ---- chat history ---------------------------------------------------------
+$("historyBtn").addEventListener("click", async () => {
+  openDrawer("historyDrawer");
+  const list = $("historyList");
+  list.innerHTML = '<div class="drawer-empty">Loading…</div>';
+  try {
+    const { conversations } = await get("/api/conversations");
+    if (!conversations.length) { list.innerHTML = '<div class="drawer-empty">No conversations yet.</div>'; return; }
+    list.innerHTML = "";
+    for (const c of conversations) {
+      const item = document.createElement("div");
+      item.className = "histo" + (c.id === state.convoId ? " active" : "");
+      item.innerHTML =
+        `<div class="histo-body"><div class="histo-title">${escapeHtml(c.title || "Untitled")}</div>` +
+        `<div class="histo-meta">${c.count} message${c.count === 1 ? "" : "s"} · ${timeAgo(c.updatedAt)}</div></div>`;
+      const del = document.createElement("button");
+      del.className = "histo-del"; del.textContent = "🗑"; del.title = "Delete";
+      del.onclick = async (e) => {
+        e.stopPropagation();
+        try { await del2(`/api/conversations/${c.id}`); } catch {}
+        if (state.convoId === c.id) { state.convoId = null; $("chat").innerHTML = ""; }
+        item.remove();
+        if (!list.children.length) list.innerHTML = '<div class="drawer-empty">No conversations yet.</div>';
+      };
+      item.appendChild(del);
+      item.addEventListener("click", () => loadConversation(c.id));
+      list.appendChild(item);
+    }
+  } catch (e) {
+    list.innerHTML = `<div class="drawer-empty">Couldn't load history: ${escapeHtml(e.message)}</div>`;
+  }
+});
+
+// Load a past conversation into the chat view.
+async function loadConversation(id) {
+  try {
+    const { conversation } = await get(`/api/conversations/${id}`);
+    state.convoId = id;
+    $("chat").innerHTML = "";
+    for (const m of conversation.messages) {
+      if (m.role === "user") {
+        const text = typeof m.content === "string" ? m.content
+          : (Array.isArray(m.content) ? (m.content.find((p) => p.type === "text")?.text || "") : "");
+        addMsg("user", text);
+      } else {
+        addMsg("ai", typeof m.content === "string" ? m.content : "");
+      }
+    }
+    closeDrawers();
+  } catch (e) { flash("Couldn't open that chat: " + e.message); }
+}
+
+// ---- memory ---------------------------------------------------------------
+$("memoryBtn").addEventListener("click", () => { openDrawer("memoryDrawer"); loadMemory(); });
+async function loadMemory() {
+  const list = $("memoryList");
+  list.innerHTML = '<div class="drawer-empty">Loading…</div>';
+  try {
+    const { memory } = await get("/api/memory");
+    renderMemory(memory);
+  } catch (e) {
+    list.innerHTML = `<div class="drawer-empty">Couldn't load memory: ${escapeHtml(e.message)}</div>`;
+  }
+}
+function renderMemory(memory) {
+  const list = $("memoryList");
+  if (!memory.length) { list.innerHTML = '<div class="drawer-empty">Nothing remembered yet.</div>'; return; }
+  list.innerHTML = "";
+  for (const m of memory) {
+    const item = document.createElement("div");
+    item.className = "memo";
+    const txt = document.createElement("div"); txt.className = "memo-text"; txt.textContent = m.text;
+    const del = document.createElement("button");
+    del.className = "memo-del"; del.textContent = "🗑"; del.title = "Forget";
+    del.onclick = async () => { try { await del2(`/api/memory/${m.id}`); item.remove(); if (!list.children.length) renderMemory([]); } catch {} };
+    item.appendChild(txt); item.appendChild(del);
+    list.appendChild(item);
+  }
+}
+$("memAddBtn").addEventListener("click", addMemoryFromInput);
+$("memInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addMemoryFromInput(); });
+async function addMemoryFromInput() {
+  const text = $("memInput").value.trim();
+  if (!text) return;
+  try {
+    const { memory } = await post("/api/memory", { text });
+    $("memInput").value = "";
+    renderMemory(memory);
+  } catch (e) { flash("Couldn't save: " + e.message); }
+}
 
 // ---- fetch helpers --------------------------------------------------------
 async function post(url, body) {
@@ -383,6 +507,12 @@ async function post(url, body) {
 }
 async function get(url) {
   const r = await fetch(API + url);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+async function del2(url) {
+  const r = await fetch(API + url, { method: "DELETE" });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   return data;

@@ -10,6 +10,11 @@ import {
   registerAuthRoutes, requireUser, currentUser, authConfigured,
 } from "./auth.js";
 import { spendCredit, markIntroSeen, publicUser, getUser, syncUser, ready as usersReady } from "./users.js";
+import {
+  ready as convosReady,
+  listConversations, getConversation, createConversation, deleteConversation,
+  appendMessage, getMemory, addMemory, deleteMemory,
+} from "./convos.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -43,6 +48,50 @@ app.get("/api/me", async (req, res) => {
 app.post("/api/intro-seen", requireUser, (req, res) => {
   markIntroSeen(req.user.id);
   res.json({ ok: true });
+});
+
+// === CONVERSATION HISTORY (per Discord user, persistent) ===================
+
+// List the user's past conversations (summaries only).
+app.get("/api/conversations", requireUser, async (req, res) => {
+  res.json({ conversations: await listConversations(req.user.id) });
+});
+
+// Get one conversation with its full message history.
+app.get("/api/conversations/:id", requireUser, async (req, res) => {
+  const convo = await getConversation(req.user.id, req.params.id);
+  if (!convo) return res.status(404).json({ error: "not found" });
+  res.json({ conversation: convo });
+});
+
+// Start a fresh conversation.
+app.post("/api/conversations", requireUser, async (req, res) => {
+  const convo = await createConversation(req.user.id, req.body?.title);
+  res.json({ conversation: convo });
+});
+
+// Delete a conversation.
+app.delete("/api/conversations/:id", requireUser, async (req, res) => {
+  const ok = await deleteConversation(req.user.id, req.params.id);
+  res.json({ ok });
+});
+
+// === LONG-TERM MEMORY ======================================================
+
+app.get("/api/memory", requireUser, async (req, res) => {
+  res.json({ memory: await getMemory(req.user.id) });
+});
+
+app.post("/api/memory", requireUser, async (req, res) => {
+  const text = (req.body?.text || "").toString();
+  if (!text.trim()) return res.status(400).json({ error: "empty memory" });
+  const memory = await addMemory(req.user.id, text);
+  res.json({ ok: true, memory });
+});
+
+app.delete("/api/memory/:id", requireUser, async (req, res) => {
+  const ok = await deleteMemory(req.user.id, req.params.id);
+  res.json({ ok });
 });
 
 // --- helpers ---------------------------------------------------------------
@@ -160,6 +209,7 @@ app.post("/api/chat", async (req, res) => {
   const attachments = req.body?.attachments;
   const thinkMode = (req.body?.thinkMode || "medium").toString();
   const mode = (req.body?.mode || "build").toString();
+  let convoId = (req.body?.convoId || "").toString() || null;
   const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
   if (!message.trim() && !hasAttachments) return res.status(400).json({ error: "empty message" });
 
@@ -172,27 +222,49 @@ app.post("/api/chat", async (req, res) => {
   res.flushHeaders?.();
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  link.history.push(buildUserMessage(message, attachments));
+  const userMsg = buildUserMessage(message, attachments);
+
+  // Build history from the user's persistent conversation (survives restarts),
+  // and pull their long-term memory to give the model continuity.
+  let history = [];
+  if (convoId) {
+    const convo = await getConversation(user.id, convoId);
+    if (convo) history = convo.messages.map((m) => ({ role: m.role, content: m.content }));
+  }
+  history.push(userMsg);
+  const memory = await getMemory(user.id);
 
   try {
     const { thinking, reply, actions, truncated, salvaged } = await runChat({
       apiKey: link.apiKey,
       model: link.model,
-      history: link.history,
+      history,
       thinkMode,
       mode,
+      memory,
       context: link.context,
       onThinking: (chunk) => send("thinking", { chunk }),
       onStatus: (s) => send("status", { status: s }),
     });
-    // Store a plain-text version in history to keep future turns small.
-    link.history.push({ role: "assistant", content: reply });
-    const queuedIds = actions.length ? queueActions(link, actions) : [];
+    // Separate "remember" actions (saved to memory) from build actions (queued).
+    const remembers = actions.filter((a) => a && a.type === "remember");
+    const buildActions = actions.filter((a) => a && a.type !== "remember");
+    for (const r of remembers) { try { await addMemory(user.id, r.text); } catch {} }
+
+    // Persist the turn to the user's conversation.
+    convoId = await appendMessage(user.id, convoId, userMsg);
+    await appendMessage(user.id, convoId, { role: "assistant", content: reply });
+
+    // Keep the ephemeral link.history in sync for the in-Studio plugin chat view.
+    link.history = (await getConversation(user.id, convoId))?.messages.map((m) => ({ role: m.role, content: m.content })) || [];
+
+    const queuedIds = buildActions.length ? queueActions(link, buildActions) : [];
     // Charge one credit for the successful generation.
     const { credits } = await spendCredit(user.id);
     send("done", {
-      thinking, reply, actions, queued: queuedIds.length,
-      truncated, salvaged, credits,
+      thinking, reply, actions: buildActions, queued: queuedIds.length,
+      truncated, salvaged, credits, convoId,
+      remembered: remembers.map((r) => r.text),
     });
   } catch (err) {
     send("error", { error: String(err.message || err) });
@@ -256,15 +328,23 @@ app.post("/api/plugin/chat", async (req, res) => {
   link.history.push({ role: "user", content: message });
 
   try {
+    const memory = owner ? await getMemory(owner.id) : [];
     const { thinking, reply, actions } = await runChat({
       apiKey: link.apiKey, model: link.model, history: link.history,
-      context: link.context,
+      context: link.context, memory,
     });
     link.history.push({ role: "assistant", content: reply });
-    const queued = actions.length ? queueActions(link, actions) : [];
+    // Save any "remember" actions to memory; only ship build actions to plugin.
+    const buildActions = actions.filter((a) => a && a.type !== "remember");
+    if (owner) {
+      for (const r of actions.filter((a) => a && a.type === "remember")) {
+        try { await addMemory(owner.id, r.text); } catch {}
+      }
+    }
+    const queued = buildActions.length ? queueActions(link, buildActions) : [];
     let credits;
     if (owner) credits = (await spendCredit(owner.id)).credits;
-    res.json({ thinking, reply, actions, queued: queued.length, credits });
+    res.json({ thinking, reply, actions: buildActions, queued: queued.length, credits });
   } catch (err) {
     res.status(502).json({ error: String(err.message || err) });
   }
@@ -274,8 +354,8 @@ app.post("/api/plugin/chat", async (req, res) => {
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 const PORT = process.env.PORT || 3000;
-// Wait for the user store (Redis or file) to load before accepting traffic.
-usersReady.then(() => {
+// Wait for the persistent stores (Redis or file) to load before serving.
+Promise.all([usersReady, convosReady]).then(() => {
   app.listen(PORT, () => {
     console.log(`FreeModel-Roblox bridge running on http://localhost:${PORT}`);
   });
