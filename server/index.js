@@ -364,7 +364,8 @@ app.post("/api/plugin/chat", async (req, res) => {
 });
 
 // === STATIC SITE ===========================================================
-app.use(express.static(path.join(__dirname, "..", "public")));
+// allow dotfiles so /.well-known/security.txt is served (trust signal).
+app.use(express.static(path.join(__dirname, "..", "public"), { dotfiles: "allow" }));
 
 const PORT = process.env.PORT || 3000;
 // Wait for the persistent stores (Redis or file) to load before serving.
