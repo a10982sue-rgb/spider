@@ -20,6 +20,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(express.json({ limit: "30mb" }));
 
+// Security headers to establish trust and prevent false positive phishing flags
+app.use((req, res, next) => {
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("X-Frame-Options", "DENY");
+  res.set("X-XSS-Protection", "1; mode=block");
+  res.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.set("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  next();
+});
+
 // CORS so the plugin (and a separately-hosted page) can call us.
 // Note: credentials (cookies) require a specific origin, but the plugin uses a
 // bearer token (not cookies), so wildcard CORS is fine for those routes.

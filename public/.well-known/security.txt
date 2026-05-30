@@ -1,0 +1,8 @@
+Contact: https://discord.gg/WJJ6j9Peu
+Preferred-Languages: en
+Canonical: https://spider-web.onrender.com/.well-known/security.txt
+
+# Spider - AI Roblox Game Builder
+# This is a legitimate development tool for Roblox Studio
+# Uses Discord OAuth for authentication
+# Not a phishing site - false positive detection

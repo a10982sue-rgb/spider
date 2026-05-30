@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://spider-web.onrender.com/sitemap.xml
+
+# Spider - AI Roblox Game Builder
+# Legitimate development tool for Roblox Studio
