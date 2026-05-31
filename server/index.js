@@ -234,6 +234,14 @@ app.post("/api/chat", async (req, res) => {
   res.flushHeaders?.();
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
+  // Abort propagation: when the browser hits the Stop button it closes the
+  // SSE connection, which fires req/res "close". We signal runChat → fetch
+  // so the upstream FreeModel call stops burning tokens immediately.
+  const ctrl = new AbortController();
+  const onClose = () => { if (!ctrl.signal.aborted) ctrl.abort(); };
+  req.on("close", onClose);
+  res.on("close", onClose);
+
   const userMsg = buildUserMessage(message, attachments);
 
   // Build history from the user's persistent conversation (survives restarts),
@@ -247,7 +255,7 @@ app.post("/api/chat", async (req, res) => {
   const memory = await getMemory(user.id);
 
   try {
-    const { thinking, reply, actions, truncated, salvaged } = await runChat({
+    const { thinking, reply, actions, plan, truncated, salvaged } = await runChat({
       apiKey: link.apiKey,
       model: link.model,
       history,
@@ -256,12 +264,16 @@ app.post("/api/chat", async (req, res) => {
       memory,
       webSearch,
       context: link.context,
+      signal: ctrl.signal,
       onThinking: (chunk) => send("thinking", { chunk }),
       onStatus: (s) => send("status", { status: s }),
     });
     // Separate "remember" actions (saved to memory) from build actions (queued).
     const remembers = actions.filter((a) => a && a.type === "remember");
-    const buildActions = actions.filter((a) => a && a.type !== "remember");
+    // If a plan was returned, treat this as a "plan-only" turn — don't queue
+    // any build actions even if the model accidentally emitted some, because
+    // the user hasn't approved yet. Memory writes (remembers) still apply.
+    const buildActions = plan ? [] : actions.filter((a) => a && a.type !== "remember");
     for (const r of remembers) { try { await addMemory(user.id, r.text); } catch {} }
 
     // Persist the turn to the user's conversation.
@@ -275,13 +287,20 @@ app.post("/api/chat", async (req, res) => {
     // Charge one credit for the successful generation.
     const { credits } = await spendCredit(user.id);
     send("done", {
-      thinking, reply, actions: buildActions, queued: queuedIds.length,
+      thinking, reply, plan, actions: buildActions, queued: queuedIds.length,
       truncated, salvaged, credits, convoId,
       remembered: remembers.map((r) => r.text),
     });
   } catch (err) {
-    send("error", { error: String(err.message || err) });
+    // Client-initiated abort: do not charge, do not error-toast — they stopped.
+    if (ctrl.signal.aborted || /aborted/i.test(String(err?.message || err))) {
+      try { send("aborted", { ok: true }); } catch {}
+    } else {
+      send("error", { error: String(err.message || err) });
+    }
   } finally {
+    req.off("close", onClose);
+    res.off("close", onClose);
     res.end();
   }
 });

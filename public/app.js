@@ -1,6 +1,6 @@
 const API = ""; // same origin as the server
 const $ = (id) => document.getElementById(id);
-const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", webSearch: false, convoId: null };
+const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", webSearch: false, convoId: null, sending: false, abortCtrl: null };
 
 // ---- auth gate ------------------------------------------------------------
 // On load: ask who we are. Show the login screen until authenticated, then
@@ -62,10 +62,12 @@ function setCredits(n) {
   $("creditsBadgeNum").textContent = n;
   $("creditsLine").classList.toggle("low", low);
   $("creditsBadge").classList.toggle("low", low);
-  // Block sending when out of credits.
-  const out = n <= 0;
-  $("sendBtn").disabled = out;
-  $("chatInput").placeholder = out
+  // Block sending when out of credits — but never override the live Stop state.
+  if (!state.sending) {
+    const out = n <= 0;
+    $("sendBtn").disabled = out;
+  }
+  $("chatInput").placeholder = n <= 0
     ? "Out of credits — ask an admin to top you up."
     : state.mode === "model"
       ? "Describe a model to create…  (e.g. a wooden cart, a sci-fi door)"
@@ -223,48 +225,115 @@ document.querySelectorAll(".chip").forEach((chip) => {
 // ---- chat submit ----------------------------------------------------------
 $("chatForm").addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (state.sending) return; // the form's Send button is repurposed as Stop while sending
   const text = input.value.trim();
   const atts = state.attachments.slice();
   if (!text && atts.length === 0) return;
 
-  const empty = $("emptyState"); if (empty) empty.remove();
-
-  addMsg("user", text, 0, atts);
   input.value = ""; autoGrow();
   state.attachments = []; renderAttachments();
-  $("sendBtn").disabled = true;
+  await sendChat(text, null, atts);
+});
+
+// Core send pipeline — used by both the form submit AND the plan "Build it"
+// button. `displayText` lets the plan-approval flow send a verbose message
+// to the AI while showing the user a clean short bubble.
+async function sendChat(text, displayText, attachments) {
+  const atts = Array.isArray(attachments) ? attachments : [];
+  if (!text && atts.length === 0) return;
+
+  const empty = $("emptyState"); if (empty) empty.remove();
+  addMsg("user", displayText || text, 0, atts);
 
   const think = addThinking();
   const statusEl = addStatusLine();
 
+  const ctrl = new AbortController();
+  state.abortCtrl = ctrl;
+  setSendingState(true);
+
   try {
     await streamChat(text, atts, $("thinkMode").value, {
+      signal: ctrl.signal,
       onThinking: (chunk) => think.append(chunk),
       onStatus: (s) => statusEl.set(s),
-      onDone: ({ reply, queued, thinking, truncated, salvaged, credits, convoId, remembered }) => {
+      onAborted: () => {
+        think.finish(); // keep the partial thinking visible, collapsed
+        statusEl.remove();
+        if (!state.abortShown) addMsg("sys", "⏸ Stopped.");
+        state.abortShown = true;
+      },
+      onDone: ({ reply, plan, queued, thinking, truncated, salvaged, credits, convoId, remembered }) => {
         think.finish(thinking);
         statusEl.remove();
-        addMsg("ai", reply, queued, null, { truncated, salvaged, remembered });
+        if (plan) {
+          addPlanCard(plan, reply);
+        } else {
+          addMsg("ai", reply, queued, null, { truncated, salvaged, remembered });
+        }
         if (credits !== undefined) setCredits(credits);
         if (convoId) state.convoId = convoId;
       },
       onError: (msg) => { think.remove(); statusEl.remove(); addMsg("sys", "Error: " + msg); },
     });
   } catch (err) {
-    think.remove(); statusEl.remove();
-    addMsg("sys", "Error: " + err.message);
+    // Network-level abort lands here; the SSE-level "aborted" event handles
+    // the clean case. Either way we don't show a scary error for a user stop.
+    if (err && (err.name === "AbortError" || /aborted/i.test(err.message || ""))) {
+      think.finish();
+      statusEl.remove();
+      // Avoid double "⏸ Stopped" if onAborted already ran.
+      if (!state.abortShown) addMsg("sys", "⏸ Stopped.");
+    } else {
+      think.remove(); statusEl.remove();
+      addMsg("sys", "Error: " + (err.message || err));
+    }
   } finally {
-    $("sendBtn").disabled = false;
+    state.abortCtrl = null;
+    state.abortShown = false;
+    setSendingState(false);
     input.focus();
   }
-});
+}
+
+// Swap the Send button into Stop mode (and back). When sending, the button
+// ignores form submit and becomes a click-to-abort control.
+const SEND_HTML = '<span>Send</span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+const STOP_HTML = '<span>Stop</span><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
+function setSendingState(sending) {
+  state.sending = sending;
+  const btn = $("sendBtn");
+  if (sending) {
+    btn.classList.add("stopping");
+    btn.innerHTML = STOP_HTML;
+    btn.type = "button";
+    btn.disabled = false;
+    btn.title = "Stop generating";
+    btn.onclick = stopCurrent;
+  } else {
+    btn.classList.remove("stopping");
+    btn.innerHTML = SEND_HTML;
+    btn.type = "submit";
+    btn.title = "Send";
+    btn.onclick = null;
+    btn.disabled = state.credits !== null && state.credits <= 0;
+  }
+}
+
+function stopCurrent() {
+  if (!state.abortCtrl) return;
+  state.abortShown = true;
+  try { state.abortCtrl.abort(); } catch {}
+}
 
 // Read the SSE stream and dispatch events.
-async function streamChat(message, attachments, thinkMode, { onThinking, onStatus, onDone, onError }) {
+async function streamChat(message, attachments, thinkMode, { onThinking, onStatus, onDone, onError, onAborted, signal }) {
   const r = await fetch(API + "/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ linkId: state.linkId, message, attachments, thinkMode, mode: state.mode, webSearch: state.webSearch, convoId: state.convoId }),
+    signal,
   });
   if (!r.ok || !r.body) {
     const data = await r.json().catch(() => ({}));
@@ -290,6 +359,7 @@ async function streamChat(message, attachments, thinkMode, { onThinking, onStatu
       if (event === "thinking") onThinking(payload.chunk || "");
       else if (event === "status") onStatus(payload.status || "");
       else if (event === "done") onDone(payload);
+      else if (event === "aborted") onAborted && onAborted();
       else if (event === "error") onError(payload.error || "stream error");
     }
   }
@@ -393,6 +463,100 @@ function addThinking() {
     },
     remove() { wrap.remove(); },
   };
+}
+
+// Render the AI's structured build plan. The user picks which optional ideas
+// to include via checkboxes, then "Build it" sends an approval message that
+// embeds the full plan + selections so the AI can execute it on the next turn.
+function addPlanCard(plan, intro) {
+  const ideas = Array.isArray(plan.ideas) ? plan.ideas : [];
+  const steps = Array.isArray(plan.steps) ? plan.steps : [];
+
+  const wrap = document.createElement("div");
+  wrap.className = "msg ai plan-card";
+
+  const introHtml = intro ? `<div class="plan-intro">${escapeHtml(intro)}</div>` : "";
+  const summaryHtml = plan.summary ? `<div class="plan-summary">${escapeHtml(plan.summary)}</div>` : "";
+  const stepsHtml = steps.length
+    ? `<div class="plan-section-h">📋 Build steps</div>
+       <ol class="plan-steps">${steps.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ol>`
+    : "";
+  const ideasHtml = ideas.length
+    ? `<div class="plan-section-h">✨ Optional extras — tick the ones you want</div>
+       <div class="plan-ideas">${ideas.map((i, idx) => `
+         <label class="plan-idea">
+           <input type="checkbox" data-idx="${idx}" ${i.default ? "checked" : ""}/>
+           <span class="plan-idea-label">${escapeHtml(i.label || "")}</span>
+         </label>
+       `).join("")}</div>`
+    : "";
+
+  wrap.innerHTML = `
+    ${introHtml}
+    <div class="plan-head">
+      <span class="plan-emoji">🛠️</span>
+      <div class="plan-title">${escapeHtml(plan.title || "Plan")}</div>
+    </div>
+    ${summaryHtml}
+    ${stepsHtml}
+    ${ideasHtml}
+    <div class="plan-actions">
+      <button class="primary plan-build" type="button">🚀 Build it</button>
+      <button class="ghost plan-cancel" type="button">Cancel</button>
+    </div>
+  `;
+
+  const buildBtn = wrap.querySelector(".plan-build");
+  const cancelBtn = wrap.querySelector(".plan-cancel");
+
+  buildBtn.addEventListener("click", () => {
+    // Lock the card so the user can't double-fire.
+    buildBtn.disabled = true; cancelBtn.disabled = true;
+    buildBtn.textContent = "Building…";
+    wrap.classList.add("approved");
+    wrap.querySelectorAll(".plan-idea input").forEach((cb) => { cb.disabled = true; });
+
+    // Collect user's choices.
+    const include = [], skip = [];
+    wrap.querySelectorAll(".plan-idea input").forEach((cb) => {
+      const idx = Number(cb.dataset.idx);
+      const i = ideas[idx];
+      if (!i) return;
+      (cb.checked ? include : skip).push(i);
+    });
+
+    // Verbose approval message for the AI (full context — it doesn't need to
+    // remember its own plan structure).
+    const lines = [
+      `[Approved plan: "${plan.title || "Plan"}"]`,
+      "",
+      "Execute these steps, in order:",
+      ...steps.map((s, i) => `${i + 1}. ${s}`),
+    ];
+    if (include.length) {
+      lines.push("", "Include these optional ideas (build them too):");
+      for (const i of include) lines.push(`- ${i.label}`);
+    }
+    if (skip.length) {
+      lines.push("", "Skip these (user unchecked them — do NOT build):");
+      for (const i of skip) lines.push(`- ${i.label}`);
+    }
+    lines.push("", "Emit the full set of build actions now. Do NOT return another plan.");
+    const fullMsg = lines.join("\n");
+
+    const extras = include.length ? ` + ${include.length} extra${include.length > 1 ? "s" : ""}` : "";
+    const display = `✓ Build the plan${extras}`;
+    sendChat(fullMsg, display, []);
+  });
+
+  cancelBtn.addEventListener("click", () => {
+    wrap.remove();
+    addMsg("sys", "Plan cancelled. Tell me what to change.");
+    input.focus();
+  });
+
+  $("chat").appendChild(wrap);
+  $("chat").scrollTop = $("chat").scrollHeight;
 }
 
 function unlock(id) { $(id).classList.remove("locked"); }

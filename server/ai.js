@@ -43,8 +43,85 @@ You MUST reply with a single JSON object, no markdown fences, of the form:
 {
   "thinking": "<your step-by-step reasoning: what the user wants, which instances you will create or change, and why>",
   "reply": "<short message to show the user>",
+  "plan": <optional plan object — see PLAN-FIRST FLOW below>,
   "actions": [ <zero or more action objects> ]
 }
+
+PLAN-FIRST FLOW (use a "plan" for substantial builds — DO NOT skip):
+
+For any request that touches multiple instances/scripts or is a whole "system"
+(a game, an obby, a shop, an announcement system, a day/night cycle, a combat
+system, leaderboards, etc.), DO NOT build immediately. FIRST return a plan and
+let the user approve it:
+
+{
+  "thinking": "...",
+  "reply": "I made a plan — pick the optional extras you want and click Build.",
+  "plan": {
+    "title": "<short name, e.g. 'Realistic Basketball Game'>",
+    "summary": "<1-2 sentences describing what you'll build>",
+    "steps": [
+      "<ordered, concrete step the build will execute>",
+      "<another step>",
+      "..."
+    ],
+    "ideas": [
+      { "id": "<short-kebab-id>", "label": "<user-friendly description>", "default": true },
+      { "id": "<another-id>", "label": "<another extra>", "default": false }
+    ]
+  },
+  "actions": []
+}
+
+When to emit a plan:
+- Whole games, multi-component systems, anything that would otherwise need
+  more than ~4 create_* / create_script actions.
+- "Make a basketball game", "build an obby", "create an announcement system",
+  "add a day/night cycle", "build a shop", "add a combat system" — ALL plan-first.
+
+When to SKIP the plan and build immediately:
+- Single property tweaks, single bug fixes, single small additions
+  ("change the sky color", "fix this script", "add one part there").
+- A turn where the user is APPROVING a plan you already showed. The approval
+  message will explicitly say so (e.g. it starts with "[Approved plan:") and
+  list which optional ideas to include and which to skip. On that turn, emit
+  ONLY the build actions — no second plan, no "ideas" — and include every
+  approved idea, skip every unapproved one. Set "plan" to null/absent.
+
+The plan's "steps" should be the actual ordered build steps you'll execute
+(create the court Model, place the hoops, write the scoring script, …) —
+they're shown to the user as a numbered list, so be concrete and short.
+
+The plan's "ideas" are OPTIONAL extras the user may or may not want — toggleable.
+Give 3–6 thoughtful ideas per plan: things a player would expect ("scoreboard
+GUI", "spectator camera", "sound effects on scoring", "match timer with halftime
+buzzer"). Mark the obviously-essential ones default:true and the more elaborate
+ones default:false.
+
+DEFAULT SURFACES — pick the right one without being told:
+
+When the user describes a feature WITHOUT specifying how/where it lives, infer
+the natural surface:
+- Announcements, notifications, chat broadcasts, event banners, alerts, toast
+  messages, server messages, news feeds → ScreenGui in StarterGui. NOT physical
+  signs, NOT SurfaceGui on a part. Don't insert any free model for the GUI.
+- HUD elements: timer, currency display, kill/death counter, ammo, health bar,
+  round status → ScreenGui in StarterGui.
+- Scoreboards / custom leaderboards beyond the default Roblox top-right list →
+  ScreenGui in StarterGui (use the leaderstats Folder pattern for the default
+  list when the user just says "leaderboard").
+- Shops, inventories, settings menus, character pickers, lobby UIs → ScreenGui
+  in StarterGui.
+- Build a Part-with-SurfaceGui (in-world sign / kiosk / billboard) ONLY when
+  the user explicitly says "in-world sign", "billboard", "kiosk", or describes
+  something physically placed in the map.
+
+For auto-built GUIs, use a polished modern style by default:
+- Dark glassy background frame with rounded corners (UICorner, CornerRadius ≈ 8–12)
+- Subtle border (UIStroke ~1px, semi-transparent white)
+- UIListLayout / UIPadding for stacks
+- Readable text (TextColor3 near white, TextScaled or sensible TextSize 14–18)
+- Do NOT insert free-model UI kits unless the user explicitly asks.
 
 Action types (one "type" field each):
 
@@ -216,13 +293,39 @@ function salvageJson(text) {
 
   const thinking = grab("thinking");
   const reply = grab("reply");
-  if (thinking === undefined && reply === undefined && actions.length === 0) return null;
-  return { thinking, reply, actions, _salvaged: true };
+  // Try to lift a full "plan": {...} object out of the partial body.
+  let plan = null;
+  const planIdx = body.indexOf('"plan"');
+  if (planIdx !== -1) {
+    const objStart = body.indexOf("{", planIdx);
+    if (objStart !== -1) {
+      let depth = 0, inStr = false, esc = false, end = -1;
+      for (let i = objStart; i < body.length; i++) {
+        const ch = body[i];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (ch === "\\") esc = true;
+          else if (ch === '"') inStr = false;
+          continue;
+        }
+        if (ch === '"') { inStr = true; continue; }
+        if (ch === "{") depth++;
+        else if (ch === "}") { depth--; if (depth === 0) { end = i; break; } }
+      }
+      if (end !== -1) {
+        try { plan = JSON.parse(body.slice(objStart, end + 1)); } catch { /* incomplete */ }
+      }
+    }
+  }
+  if (thinking === undefined && reply === undefined && actions.length === 0 && !plan) return null;
+  return { thinking, reply, actions, plan, _salvaged: true };
 }
 
 // One streaming completion call. Returns { content, reasoning, finishReason }.
 // Fires onReason(chunk) for each native reasoning delta.
-async function streamOnce({ apiKey, model, messages, onReason, think }) {
+// `signal` (optional AbortSignal) cancels the in-flight fetch + stream so we
+// stop burning tokens the moment the client clicks Stop.
+async function streamOnce({ apiKey, model, messages, onReason, think, signal }) {
   const mode = THINK_MODES[think] || THINK_MODES.medium;
   const body = {
     model,
@@ -241,6 +344,7 @@ async function streamOnce({ apiKey, model, messages, onReason, think }) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
+    signal,
   });
 
   if (!res.ok) {
@@ -275,7 +379,7 @@ async function streamOnce({ apiKey, model, messages, onReason, think }) {
   return { content, reasoning, finishReason };
 }
 
-export async function runChat({ apiKey, model, history, thinkMode, context, mode, memory, webSearch, onThinking, onStatus }) {
+export async function runChat({ apiKey, model, history, thinkMode, context, mode, memory, webSearch, onThinking, onStatus, signal }) {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
   ];
@@ -344,13 +448,14 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   let reasoning = "";
 
   // Initial call.
-  let r = await streamOnce({ apiKey, model, messages, onReason: emit, think });
+  let r = await streamOnce({ apiKey, model, messages, onReason: emit, think, signal });
   content += r.content;
   reasoning += r.reasoning;
 
   // Auto-continue if the model ran out of room on a big build.
   let continuations = 0;
   while (r.finishReason === "length" && continuations < MAX_CONTINUATIONS) {
+    if (signal?.aborted) throw new Error("aborted");
     continuations++;
     status(`Generating more… (part ${continuations + 1})`);
     const followUp = [
@@ -361,7 +466,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
         "any text already sent and do not restart the object — just resume the " +
         "raw characters." },
     ];
-    r = await streamOnce({ apiKey, model, messages: followUp, onReason: emit, think });
+    r = await streamOnce({ apiKey, model, messages: followUp, onReason: emit, think, signal });
     content += r.content;
     reasoning += r.reasoning;
   }
@@ -376,11 +481,12 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
 
   if (!parsed) {
     // Not JSON at all — treat the whole thing as a chat reply.
-    return { thinking: reasoning, reply: content || "(no response)", actions: [], truncated: r.finishReason === "length" };
+    return { thinking: reasoning, reply: content || "(no response)", actions: [], plan: null, truncated: r.finishReason === "length" };
   }
 
   const reply = typeof parsed.reply === "string" ? parsed.reply : "";
   const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
+  const plan = sanitizePlan(parsed.plan);
   let thinking = reasoning;
   if (!thinking && typeof parsed.thinking === "string") {
     thinking = parsed.thinking;
@@ -388,10 +494,34 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   }
   return {
     thinking,
-    reply: reply || (actions.length ? "(done)" : "(no response)"),
+    reply: reply || (plan ? "I made a plan — pick the optional extras and click Build." : actions.length ? "(done)" : "(no response)"),
     actions,
+    plan,
     raw: content,
     salvaged,
     truncated: r.finishReason === "length",
   };
+}
+
+// Coerce a model-emitted plan into a known shape. Returns null if the object
+// is missing the bare-minimum fields (title + at least one step) so the UI
+// doesn't render an empty card.
+function sanitizePlan(p) {
+  if (!p || typeof p !== "object") return null;
+  const title = typeof p.title === "string" ? p.title.trim() : "";
+  const summary = typeof p.summary === "string" ? p.summary.trim() : "";
+  const steps = Array.isArray(p.steps)
+    ? p.steps.map((s) => (typeof s === "string" ? s.trim() : "")).filter(Boolean)
+    : [];
+  const ideas = Array.isArray(p.ideas)
+    ? p.ideas
+        .map((i, idx) => i && typeof i === "object" ? {
+          id: (typeof i.id === "string" && i.id.trim()) || `idea-${idx + 1}`,
+          label: typeof i.label === "string" ? i.label.trim() : "",
+          default: i.default === true,
+        } : null)
+        .filter((i) => i && i.label)
+    : [];
+  if (!title || steps.length === 0) return null;
+  return { title, summary, steps, ideas };
 }
