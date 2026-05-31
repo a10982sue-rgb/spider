@@ -234,13 +234,17 @@ app.post("/api/chat", async (req, res) => {
   res.flushHeaders?.();
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  // Abort propagation: when the browser hits the Stop button it closes the
-  // SSE connection, which fires req/res "close". We signal runChat → fetch
-  // so the upstream FreeModel call stops burning tokens immediately.
+  // Abort propagation: if the browser closes the SSE connection before we've
+  // finished writing, we abort the upstream FreeModel fetch so it stops
+  // burning tokens. Subscribe only to `res` (not `req`) — req.close can fire
+  // unrelated to client disconnect after Express finishes reading the body.
+  // `res.writableEnded` lets us distinguish "client closed early" from "we
+  // called res.end() ourselves at the end of the handler".
   const ctrl = new AbortController();
-  const onClose = () => { if (!ctrl.signal.aborted) ctrl.abort(); };
-  req.on("close", onClose);
-  res.on("close", onClose);
+  const onResClose = () => {
+    if (!res.writableEnded && !ctrl.signal.aborted) ctrl.abort();
+  };
+  res.on("close", onResClose);
 
   const userMsg = buildUserMessage(message, attachments);
 
@@ -303,8 +307,7 @@ app.post("/api/chat", async (req, res) => {
       send("error", { error: String(err.message || err) });
     }
   } finally {
-    req.off("close", onClose);
-    res.off("close", onClose);
+    res.off("close", onResClose);
     res.end();
   }
 });
