@@ -455,7 +455,11 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   // Auto-continue if the model ran out of room on a big build.
   let continuations = 0;
   while (r.finishReason === "length" && continuations < MAX_CONTINUATIONS) {
-    if (signal?.aborted) throw new Error("aborted");
+    if (signal?.aborted) {
+      const e = new Error("aborted");
+      e.name = "AbortError";
+      throw e;
+    }
     continuations++;
     status(`Generating more… (part ${continuations + 1})`);
     const followUp = [

@@ -292,8 +292,12 @@ app.post("/api/chat", async (req, res) => {
       remembered: remembers.map((r) => r.text),
     });
   } catch (err) {
-    // Client-initiated abort: do not charge, do not error-toast — they stopped.
-    if (ctrl.signal.aborted || /aborted/i.test(String(err?.message || err))) {
+    // Only treat as a real user-abort if the signal actually fired or the
+    // error is a proper AbortError. Don't pattern-match on the error message
+    // — upstream errors sometimes contain the word "aborted" by coincidence
+    // and we'd incorrectly tell the UI the user stopped.
+    const wasAborted = ctrl.signal.aborted || err?.name === "AbortError";
+    if (wasAborted) {
       try { send("aborted", { ok: true }); } catch {}
     } else {
       send("error", { error: String(err.message || err) });

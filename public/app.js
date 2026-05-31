@@ -1,6 +1,6 @@
 const API = ""; // same origin as the server
 const $ = (id) => document.getElementById(id);
-const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", webSearch: false, convoId: null, sending: false, abortCtrl: null };
+const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", webSearch: false, convoId: null, sending: false, abortCtrl: null, userStopped: false, abortShown: false };
 
 // ---- auth gate ------------------------------------------------------------
 // On load: ask who we are. Show the login screen until authenticated, then
@@ -260,8 +260,13 @@ async function sendChat(text, displayText, attachments) {
       onAborted: () => {
         think.finish(); // keep the partial thinking visible, collapsed
         statusEl.remove();
-        if (!state.abortShown) addMsg("sys", "⏸ Stopped.");
-        state.abortShown = true;
+        // Only show "Stopped" when the user actually clicked Stop. If the
+        // server sent `aborted` for some other reason, this is silent —
+        // the catch block will surface a real error if there is one.
+        if (state.userStopped && !state.abortShown) {
+          addMsg("sys", "⏸ Stopped.");
+          state.abortShown = true;
+        }
       },
       onDone: ({ reply, plan, queued, thinking, truncated, salvaged, credits, convoId, remembered }) => {
         think.finish(thinking);
@@ -277,13 +282,21 @@ async function sendChat(text, displayText, attachments) {
       onError: (msg) => { think.remove(); statusEl.remove(); addMsg("sys", "Error: " + msg); },
     });
   } catch (err) {
-    // Network-level abort lands here; the SSE-level "aborted" event handles
-    // the clean case. Either way we don't show a scary error for a user stop.
-    if (err && (err.name === "AbortError" || /aborted/i.test(err.message || ""))) {
+    // AbortError means the fetch was cancelled. We only show "Stopped" when
+    // WE were the ones who triggered it (via the Stop button) — otherwise
+    // the connection dropped for some other reason and the user should see
+    // a real error, not a misleading "Stopped" toast.
+    if (err && err.name === "AbortError") {
       think.finish();
       statusEl.remove();
-      // Avoid double "⏸ Stopped" if onAborted already ran.
-      if (!state.abortShown) addMsg("sys", "⏸ Stopped.");
+      if (state.abortShown) {
+        // user clicked Stop — onAborted may have already added the message
+      } else if (state.userStopped) {
+        addMsg("sys", "⏸ Stopped.");
+        state.abortShown = true;
+      } else {
+        addMsg("sys", "Connection lost.");
+      }
     } else {
       think.remove(); statusEl.remove();
       addMsg("sys", "Error: " + (err.message || err));
@@ -291,6 +304,7 @@ async function sendChat(text, displayText, attachments) {
   } finally {
     state.abortCtrl = null;
     state.abortShown = false;
+    state.userStopped = false;
     setSendingState(false);
     input.focus();
   }
@@ -323,6 +337,7 @@ function setSendingState(sending) {
 
 function stopCurrent() {
   if (!state.abortCtrl) return;
+  state.userStopped = true;
   state.abortShown = true;
   try { state.abortCtrl.abort(); } catch {}
 }
