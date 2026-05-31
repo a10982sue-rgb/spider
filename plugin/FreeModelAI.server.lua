@@ -174,6 +174,17 @@ local MAX_NODES = 1500        -- stop walking after this many instances
 local MAX_SCRIPT_CHARS = 12000 -- per-script source cap
 local MAX_DEPTH = 12
 
+-- Classes that get a flat Named-Index entry at the top of the snapshot. Picks
+-- user-named containers, every script, every remote/bindable — the things the
+-- AI is most likely to be asked about by name ("EventService", "Handler",
+-- "OnDamage"). Anything else stays in the tree but isn't indexed by name.
+local INDEX_CLASSES = {
+	Folder = true, Configuration = true, Model = true,
+	Script = true, LocalScript = true, ModuleScript = true,
+	RemoteEvent = true, RemoteFunction = true,
+	BindableEvent = true, BindableFunction = true,
+}
+
 -- Build a `game.Service.Child…` path so the AI can target it in actions.
 local function instancePath(inst)
 	local parts = {}
@@ -191,6 +202,7 @@ local function captureSnapshot()
 	local truncated = false
 	local sourceFailures = 0  -- scripts whose .Source we couldn't read (permission)
 	local sourcesRead = 0
+	local nameIndex = {}      -- name -> { {class=..., path=...}, ... }
 
 	local function indent(d) return string.rep("  ", d) end
 
@@ -212,6 +224,14 @@ local function captureSnapshot()
 			if nodes >= MAX_NODES then truncated = true; return end
 			nodes += 1
 			table.insert(out, string.format("%s- %s (%s)", indent(depth), child.Name, child.ClassName))
+
+			-- Index user-named containers / scripts / remotes by name so the AI
+			-- can look up "EventService" → full path without walking the tree.
+			if INDEX_CLASSES[child.ClassName] then
+				local list = nameIndex[child.Name]
+				if not list then list = {}; nameIndex[child.Name] = list end
+				table.insert(list, { class = child.ClassName, path = instancePath(child) })
+			end
 
 			-- Inline the full source of any script so the AI can read/fix it.
 			if child:IsA("LuaSourceContainer") then
@@ -259,6 +279,34 @@ local function captureSnapshot()
 				end
 			end
 		end
+	end
+
+	-- Build the Named-Index — a flat lookup of every important named instance
+	-- in the place. Lets the AI resolve "EventService" → full path in one
+	-- read without hunting through the tree.
+	if next(nameIndex) then
+		local names = {}
+		for k in pairs(nameIndex) do table.insert(names, k) end
+		table.sort(names)
+		local lines = {
+			"## Named-Index — full paths of every named container / script / remote.",
+			"## When the user refers to one of these by name, use the FULL path below",
+			"## as your action's \"parent\" or \"path\". Do not guess paths.",
+		}
+		for _, n in ipairs(names) do
+			local entries = nameIndex[n]
+			if #entries == 1 then
+				local e = entries[1]
+				table.insert(lines, string.format("- %s [%s] -> %s", n, e.class, e.path))
+			else
+				table.insert(lines, string.format("- %s (%d):", n, #entries))
+				for _, e in ipairs(entries) do
+					table.insert(lines, string.format("    - [%s] %s", e.class, e.path))
+				end
+			end
+		end
+		table.insert(out, 1, "")
+		table.insert(out, 1, table.concat(lines, "\n"))
 	end
 
 	-- If we couldn't read ANY script sources, the plugin is almost certainly
@@ -455,20 +503,66 @@ local function c3(t)
 end
 
 -- Resolve a dotted path like "Workspace.Model.Part" starting from `game`.
+-- Falls back to a global name search if exact resolution fails, so the AI can
+-- target instances by name alone (e.g. "EventService.Handler") without
+-- knowing where the user keeps them. The service-name shortcut only fires at
+-- the first segment so a stray "Lighting" mid-path can't teleport us out.
 local function resolvePath(path)
 	if not path or path == "" then return workspace end
-	local node = game
-	for part in string.gmatch(path, "[^%.]+") do
-		local nxt = node:FindFirstChild(part)
-		if not nxt then
-			-- allow service names at the top level
-			local okSvc, svc = pcall(function() return game:GetService(part) end)
-			nxt = (okSvc and svc) or nil
+
+	local function descendantNamed(root, name)
+		for _, d in ipairs(root:GetDescendants()) do
+			if d.Name == name then return d end
 		end
-		if not nxt then return nil, ("not found: " .. part .. " in " .. path) end
-		node = nxt
+		return nil
 	end
-	return node
+
+	local function strict(p)
+		local node = game
+		local first = true
+		for part in string.gmatch(p, "[^%.]+") do
+			local nxt = node:FindFirstChild(part)
+			if not nxt and first then
+				local okSvc, svc = pcall(function() return game:GetService(part) end)
+				nxt = (okSvc and svc) or nil
+			end
+			if not nxt then return nil, ("not found: " .. part .. " in " .. p) end
+			node = nxt
+			first = false
+		end
+		return node
+	end
+
+	local node, err = strict(path)
+	if node then return node end
+
+	-- Strict resolution missed. Locate the first segment by NAME anywhere in
+	-- the searched services, then walk the rest beneath it. Same set of
+	-- services the snapshot exposes, so behaviour matches what the AI was shown.
+	local segments = {}
+	for part in string.gmatch(path, "[^%.]+") do table.insert(segments, part) end
+	if #segments == 0 then return nil, err end
+
+	local first = segments[1]
+	local found
+	for _, svcName in ipairs(SNAPSHOT_SERVICES) do
+		local okSvc, svc = pcall(function() return game:GetService(svcName) end)
+		if okSvc and svc then
+			if svc.Name == first then found = svc; break end
+			local hit = descendantNamed(svc, first)
+			if hit then found = hit; break end
+		end
+	end
+	if not found then return nil, ("not found: " .. first .. " in " .. path) end
+
+	local cur = found
+	for i = 2, #segments do
+		local seg = segments[i]
+		local nxt = cur:FindFirstChild(seg) or descendantNamed(cur, seg)
+		if not nxt then return nil, ("not found: " .. seg .. " under " .. cur:GetFullName()) end
+		cur = nxt
+	end
+	return cur
 end
 
 -- Apply a property table to an instance, coercing vector/color arrays & enums.
