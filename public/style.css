@@ -571,10 +571,6 @@ button.primary:disabled {
   font-size: 11px; font-weight: 500;
   color: var(--warn);
 }
-.remember-tag {
-  display: block; margin-top: 6px;
-  font-size: 11px; color: var(--info);
-}
 
 .act-result {
   font-size: 11.5px;
@@ -1164,37 +1160,6 @@ button.primary.send {
   transition: all 0.15s ease;
 }
 .histo-del:hover {
-  color: var(--danger);
-  background: var(--danger-soft);
-}
-
-/* Memory items */
-.mem-add { display: flex; gap: 6px; margin-bottom: 12px; }
-.mem-add input { flex: 1; }
-.mem-add .primary {
-  width: auto; margin-top: 0;
-  height: 36px; padding: 0 14px;
-  flex: none;
-}
-.memo {
-  display: flex; align-items: flex-start; gap: 8px;
-  padding: 10px 12px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  font-size: 12.5px; line-height: 1.5;
-}
-.memo-text { flex: 1; color: var(--text-1); }
-.memo-del {
-  flex: none;
-  width: 22px; height: 22px;
-  display: grid; place-items: center;
-  background: transparent; border: 0;
-  color: var(--text-3); font-size: 12px;
-  border-radius: var(--r-sm);
-  transition: all 0.15s ease;
-}
-.memo-del:hover {
   color: var(--danger);
   background: var(--danger-soft);
 }

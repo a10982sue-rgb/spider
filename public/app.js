@@ -268,13 +268,13 @@ async function sendChat(text, displayText, attachments) {
           state.abortShown = true;
         }
       },
-      onDone: ({ reply, plan, queued, thinking, truncated, salvaged, credits, convoId, remembered }) => {
+      onDone: ({ reply, plan, queued, thinking, truncated, salvaged, credits, convoId }) => {
         think.finish(thinking);
         statusEl.remove();
         if (plan) {
           addPlanCard(plan, reply);
         } else {
-          addMsg("ai", reply, queued, null, { truncated, salvaged, remembered });
+          addMsg("ai", reply, queued, null, { truncated, salvaged });
         }
         if (credits !== undefined) setCredits(credits);
         if (convoId) state.convoId = convoId;
@@ -426,11 +426,6 @@ function addMsg(kind, text, queued, attachments, meta) {
     const w = document.createElement("span"); w.className = "warn-tag";
     w.textContent = "⚠ Recovered a malformed response; some actions may be missing.";
     div.appendChild(w);
-  }
-  if (meta && Array.isArray(meta.remembered) && meta.remembered.length) {
-    const r = document.createElement("span"); r.className = "remember-tag";
-    r.textContent = "🧠 Remembered: " + meta.remembered.join("; ");
-    div.appendChild(r);
   }
   $("chat").appendChild(div);
   $("chat").scrollTop = $("chat").scrollHeight;
@@ -586,11 +581,10 @@ function timeAgo(ts) {
   return Math.floor(s / 86400) + "d ago";
 }
 
-// ---- drawers (history + memory) -------------------------------------------
+// ---- drawers (history) ----------------------------------------------------
 function openDrawer(id) { $(id).hidden = false; $("drawerScrim").hidden = false; }
 function closeDrawers() {
   $("historyDrawer").hidden = true;
-  $("memoryDrawer").hidden = true;
   $("drawerScrim").hidden = true;
 }
 $("drawerScrim").addEventListener("click", closeDrawers);
@@ -656,45 +650,6 @@ async function loadConversation(id) {
     }
     closeDrawers();
   } catch (e) { flash("Couldn't open that chat: " + e.message); }
-}
-
-// ---- memory ---------------------------------------------------------------
-$("memoryBtn").addEventListener("click", () => { openDrawer("memoryDrawer"); loadMemory(); });
-async function loadMemory() {
-  const list = $("memoryList");
-  list.innerHTML = '<div class="drawer-empty">Loading…</div>';
-  try {
-    const { memory } = await get("/api/memory");
-    renderMemory(memory);
-  } catch (e) {
-    list.innerHTML = `<div class="drawer-empty">Couldn't load memory: ${escapeHtml(e.message)}</div>`;
-  }
-}
-function renderMemory(memory) {
-  const list = $("memoryList");
-  if (!memory.length) { list.innerHTML = '<div class="drawer-empty">Nothing remembered yet.</div>'; return; }
-  list.innerHTML = "";
-  for (const m of memory) {
-    const item = document.createElement("div");
-    item.className = "memo";
-    const txt = document.createElement("div"); txt.className = "memo-text"; txt.textContent = m.text;
-    const del = document.createElement("button");
-    del.className = "memo-del"; del.textContent = "🗑"; del.title = "Forget";
-    del.onclick = async () => { try { await del2(`/api/memory/${m.id}`); item.remove(); if (!list.children.length) renderMemory([]); } catch {} };
-    item.appendChild(txt); item.appendChild(del);
-    list.appendChild(item);
-  }
-}
-$("memAddBtn").addEventListener("click", addMemoryFromInput);
-$("memInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addMemoryFromInput(); });
-async function addMemoryFromInput() {
-  const text = $("memInput").value.trim();
-  if (!text) return;
-  try {
-    const { memory } = await post("/api/memory", { text });
-    $("memInput").value = "";
-    renderMemory(memory);
-  } catch (e) { flash("Couldn't save: " + e.message); }
 }
 
 // ---- fetch helpers --------------------------------------------------------

@@ -13,7 +13,7 @@ import { spendCredit, markIntroSeen, publicUser, getUser, syncUser, ready as use
 import {
   ready as convosReady,
   listConversations, getConversation, createConversation, deleteConversation,
-  appendMessage, getMemory, addMemory, deleteMemory,
+  appendMessage,
 } from "./convos.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -83,24 +83,6 @@ app.post("/api/conversations", requireUser, async (req, res) => {
 // Delete a conversation.
 app.delete("/api/conversations/:id", requireUser, async (req, res) => {
   const ok = await deleteConversation(req.user.id, req.params.id);
-  res.json({ ok });
-});
-
-// === LONG-TERM MEMORY ======================================================
-
-app.get("/api/memory", requireUser, async (req, res) => {
-  res.json({ memory: await getMemory(req.user.id) });
-});
-
-app.post("/api/memory", requireUser, async (req, res) => {
-  const text = (req.body?.text || "").toString();
-  if (!text.trim()) return res.status(400).json({ error: "empty memory" });
-  const memory = await addMemory(req.user.id, text);
-  res.json({ ok: true, memory });
-});
-
-app.delete("/api/memory/:id", requireUser, async (req, res) => {
-  const ok = await deleteMemory(req.user.id, req.params.id);
   res.json({ ok });
 });
 
@@ -248,15 +230,13 @@ app.post("/api/chat", async (req, res) => {
 
   const userMsg = buildUserMessage(message, attachments);
 
-  // Build history from the user's persistent conversation (survives restarts),
-  // and pull their long-term memory to give the model continuity.
+  // Build history from the user's persistent conversation (survives restarts).
   let history = [];
   if (convoId) {
     const convo = await getConversation(user.id, convoId);
     if (convo) history = convo.messages.map((m) => ({ role: m.role, content: m.content }));
   }
   history.push(userMsg);
-  const memory = await getMemory(user.id);
 
   try {
     const { thinking, reply, actions, plan, truncated, salvaged } = await runChat({
@@ -265,20 +245,16 @@ app.post("/api/chat", async (req, res) => {
       history,
       thinkMode,
       mode,
-      memory,
       webSearch,
       context: link.context,
       signal: ctrl.signal,
       onThinking: (chunk) => send("thinking", { chunk }),
       onStatus: (s) => send("status", { status: s }),
     });
-    // Separate "remember" actions (saved to memory) from build actions (queued).
-    const remembers = actions.filter((a) => a && a.type === "remember");
     // If a plan was returned, treat this as a "plan-only" turn — don't queue
     // any build actions even if the model accidentally emitted some, because
-    // the user hasn't approved yet. Memory writes (remembers) still apply.
-    const buildActions = plan ? [] : actions.filter((a) => a && a.type !== "remember");
-    for (const r of remembers) { try { await addMemory(user.id, r.text); } catch {} }
+    // the user hasn't approved yet.
+    const buildActions = plan ? [] : actions.filter((a) => a && a.type);
 
     // Persist the turn to the user's conversation.
     convoId = await appendMessage(user.id, convoId, userMsg);
@@ -293,7 +269,6 @@ app.post("/api/chat", async (req, res) => {
     send("done", {
       thinking, reply, plan, actions: buildActions, queued: queuedIds.length,
       truncated, salvaged, credits, convoId,
-      remembered: remembers.map((r) => r.text),
     });
   } catch (err) {
     // Only treat as a real user-abort if the signal actually fired or the
@@ -367,19 +342,12 @@ app.post("/api/plugin/chat", async (req, res) => {
   link.history.push({ role: "user", content: message });
 
   try {
-    const memory = owner ? await getMemory(owner.id) : [];
     const { thinking, reply, actions } = await runChat({
       apiKey: link.apiKey, model: link.model, history: link.history,
-      context: link.context, memory,
+      context: link.context,
     });
     link.history.push({ role: "assistant", content: reply });
-    // Save any "remember" actions to memory; only ship build actions to plugin.
-    const buildActions = actions.filter((a) => a && a.type !== "remember");
-    if (owner) {
-      for (const r of actions.filter((a) => a && a.type === "remember")) {
-        try { await addMemory(owner.id, r.text); } catch {}
-      }
-    }
+    const buildActions = actions.filter((a) => a && a.type);
     const queued = buildActions.length ? queueActions(link, buildActions) : [];
     let credits;
     if (owner) credits = (await spendCredit(owner.id)).credits;

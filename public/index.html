@@ -120,7 +120,6 @@
         <div class="head-actions">
           <button class="head-btn" id="newChatBtn" title="Start a new chat">＋ New</button>
           <button class="head-btn" id="historyBtn" title="Chat history">History</button>
-          <button class="head-btn" id="memoryBtn" title="What Spider remembers">Memory</button>
           <div class="credits-badge" id="creditsBadge" title="Generations remaining">
             <span class="cb-ico">⚡</span><b id="creditsBadgeNum">20</b>
           </div>
@@ -189,20 +188,6 @@
       </div>
       <p class="drawer-hint">Past conversations. Click one to reopen.</p>
       <div class="drawer-list" id="historyList"></div>
-    </div>
-
-    <!-- DRAWER: memory -->
-    <div class="drawer" id="memoryDrawer" hidden>
-      <div class="drawer-head">
-        <h3>Memory</h3>
-        <button class="drawer-x" data-close="memoryDrawer">✕</button>
-      </div>
-      <p class="drawer-hint">Durable facts Spider keeps across every chat. It saves these itself; you can add your own too.</p>
-      <div class="mem-add">
-        <input id="memInput" type="text" placeholder="Add something to remember…" />
-        <button class="primary" id="memAddBtn">Add</button>
-      </div>
-      <div class="drawer-list" id="memoryList"></div>
     </div>
 
     <div class="drawer-scrim" id="drawerScrim" hidden></div>

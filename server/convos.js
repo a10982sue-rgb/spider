@@ -1,14 +1,11 @@
-// Persistent per-user conversation history + long-term memory.
+// Persistent per-user conversation history.
 //
 // Same dual backend as users.js:
 //   • Upstash Redis when UPSTASH_REDIS_REST_* are set (survives redeploys).
 //   • Local JSON file (data/convos.json) otherwise — for local dev.
 //
 // Shape per Discord user id:
-//   {
-//     conversations: [ { id, title, createdAt, updatedAt, messages: [ {role, content, ts} ] } ],
-//     memory: [ { id, text, createdAt } ]   // long-term facts the AI should remember
-//   }
+//   { conversations: [ { id, title, createdAt, updatedAt, messages: [ {role, content, ts} ] } ] }
 //
 // The in-memory Map is the live source of truth; writes are debounced (file) or
 // fire-and-forget per user (Redis). Reads stay synchronous on the hot path.
@@ -29,7 +26,6 @@ const REDIS_HASH = "spider:convos"; // field per user id -> JSON of their record
 // Caps so storage / model context stay sane.
 const MAX_CONVOS = 50;          // keep the most recent N conversations per user
 const MAX_MSGS_PER_CONVO = 400; // trim oldest messages beyond this
-const MAX_MEMORY = 100;         // remembered facts per user
 
 const newId = () => crypto.randomBytes(8).toString("hex");
 
@@ -46,7 +42,7 @@ async function redisCmd(cmd) {
 }
 
 function blankRecord() {
-  return { conversations: [], memory: [] };
+  return { conversations: [] };
 }
 
 // --- load / persist --------------------------------------------------------
@@ -150,7 +146,6 @@ export async function createConversation(userId, title) {
   const now = Date.now();
   const convo = { id: newId(), title: title || "New chat", createdAt: now, updatedAt: now, messages: [] };
   rec.conversations.unshift(convo);
-  // Trim to the most recent MAX_CONVOS.
   if (rec.conversations.length > MAX_CONVOS) rec.conversations.length = MAX_CONVOS;
   persist(userId);
   return convo;
@@ -191,36 +186,4 @@ export async function appendMessage(userId, convoId, message) {
   convo.updatedAt = Date.now();
   persist(userId);
   return convo.id;
-}
-
-// --- long-term memory ------------------------------------------------------
-
-export async function getMemory(userId) {
-  await refresh(userId);
-  const rec = store.get(String(userId));
-  return rec ? rec.memory.slice() : [];
-}
-
-export async function addMemory(userId, text) {
-  const clean = (text || "").toString().trim();
-  if (!clean) return null;
-  await refresh(userId);
-  const rec = getRecord(userId);
-  // De-dupe identical facts.
-  if (rec.memory.some((m) => m.text === clean)) return rec.memory;
-  rec.memory.unshift({ id: newId(), text: clean.slice(0, 2000), createdAt: Date.now() });
-  if (rec.memory.length > MAX_MEMORY) rec.memory.length = MAX_MEMORY;
-  persist(userId);
-  return rec.memory;
-}
-
-export async function deleteMemory(userId, memId) {
-  await refresh(userId);
-  const rec = store.get(String(userId));
-  if (!rec) return false;
-  const before = rec.memory.length;
-  rec.memory = rec.memory.filter((m) => m.id !== memId);
-  if (rec.memory.length === before) return false;
-  persist(userId);
-  return true;
 }

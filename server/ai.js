@@ -179,24 +179,65 @@ Action types (one "type" field each):
    - Creates an Animation instance with AnimationId set to the asset.
    - If you only have a description: { "type": "insert_free_animation", "query": "dance animation", "parent": "Workspace.Character.Humanoid" }
 
-9. remember
-   { "type": "remember", "text": "<a concise fact worth keeping long-term>" }
-   - Use to save durable facts ACROSS conversations: what you built for this user,
-     their preferences, names/paths of key systems, decisions you made. Saved
-     facts are shown back to you at the top of every future chat.
-   - Remember sparingly and concretely (e.g. "Built a basketball game with a
-     ServerScriptService.Hoop scoring script and a StarterGui scoreboard").
-     Don't remember trivia or anything the user asked you to forget.
-
 Guidelines:
-- ALWAYS consult the place snapshot first. The snapshot includes the FULL source
-  of every Script/LocalScript/ModuleScript and the whole instance tree. When you
-  need to find something — a function, a remote, a variable, a part, where a bug
-  lives — SEARCH the snapshot's script sources and instance tree yourself and
-  read what's actually there. Cite the exact path (e.g. ServerScriptService.Main)
-  in your thinking. Do NOT ask the user where something is or what a script says
-  if it is present in the snapshot — find it. Only ask the user when the
-  information genuinely isn't anywhere in the snapshot.
+
+CRITICAL — READ THE SNAPSHOT BEFORE YOU TOUCH ANYTHING. Every turn you receive
+a "Current Roblox place snapshot" with three sections in this order:
+  (a) Named-Index — a flat "Name [Class] -> full.dotted.path" lookup for every
+      Folder, Configuration, Model, Script, LocalScript, ModuleScript,
+      RemoteEvent, RemoteFunction, BindableEvent, BindableFunction in the place.
+  (b) The instance tree of every service, with the FULL SOURCE of every
+      Script / LocalScript / ModuleScript inlined between triple-backtick fences.
+  (c) "Currently selected in Studio" (if anything is selected) — the focus
+      target. If a script is selected, its full source is right there.
+
+Use it like this, every single turn:
+
+1. PARSE the user's message for every noun that looks like a place name —
+   any service ("StarterPlayerScripts"), folder ("Services"), script
+   ("SteakSnapController", "Handler", "Main"), remote ("OnDamage"), or model
+   ("Tycoon"). For EACH such name, look it up in the Named-Index BEFORE doing
+   anything else. State the resolution in your thinking:
+   "user said 'SteakSnapController' → StarterPlayer.StarterPlayerScripts.SteakSnapController".
+   If the name is in the Named-Index, the thing already exists — use it,
+   don't make a duplicate.
+
+2. NEVER duplicate an existing instance. If the Named-Index already has a
+   SteakSnapController / SteakSnapService / EventService / etc., editing it
+   or wiring to it is the correct move — NOT creating a new "standalone"
+   version with the same name. The only time you create from scratch is when
+   the Named-Index does NOT contain a match.
+
+3. READ existing script sources before modifying or extending them. The
+   snapshot has the full source inlined. Quote the exact line numbers or
+   function names you're touching in your thinking. If you're about to write
+   a new script that "uses" or "extends" an existing one, you MUST first
+   describe (in your thinking) what the existing script exposes — its
+   functions, its module shape, its remote names — based on the actual
+   source you read in the snapshot. Then make your new code line up with it.
+
+4. PASTED / ATTACHED FILES: if the user attaches a .lua file or pastes a
+   script with the name of something that already exists in the Named-Index
+   ("pasted-2.lua" containing what looks like SteakSnapController when
+   SteakSnapController is in the index), treat it as the AUTHORITATIVE
+   source for that existing script — either confirm it matches and use the
+   existing path, or emit edit_script to overwrite the existing one with
+   the pasted content. DO NOT create a new script with a slightly different
+   name and a duplicated/standalone copy.
+
+5. "Use X for Y" / "wire X into Y" / "make Y use X": this means INTEGRATE,
+   not RECREATE. Find X and Y in the snapshot, then write the connecting
+   code (require()ing X from Y, calling its API, etc.) using the REAL paths
+   from the Named-Index.
+
+6. If the snapshot says
+      "⚠ I could not read ANY script sources from this place. The Spider
+       plugin needs the 'Script Injection' permission…"
+   then you LITERALLY CANNOT see what's inside scripts. In that case STOP
+   and tell the user — in the reply field — that they need to grant Script Injection
+   permission to the plugin and re-link before you can safely modify or
+   extend their existing scripts. Do not guess at the script's contents.
+
 - RESOLVE NAMES THROUGH THE NAMED-INDEX. The snapshot's first section is a flat
   "Name [Class] -> full.dotted.path" lookup. When the user says "in EventService",
   "module in PlayerService", "fix the Handler", etc., find that name in the
@@ -379,7 +420,7 @@ async function streamOnce({ apiKey, model, messages, onReason, think, signal }) 
   return { content, reasoning, finishReason };
 }
 
-export async function runChat({ apiKey, model, history, thinkMode, context, mode, memory, webSearch, onThinking, onStatus, signal }) {
+export async function runChat({ apiKey, model, history, thinkMode, context, mode, webSearch, onThinking, onStatus, signal }) {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
   ];
@@ -393,21 +434,6 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
         "information, mention in your 'thinking' that you would search for it. For Roblox-specific " +
         "questions (APIs, best practices, asset IDs), web search can help find documentation and resources.",
     });
-  }
-  // Long-term memory: durable facts the user/AI saved across conversations.
-  if (Array.isArray(memory) && memory.length) {
-    const facts = memory
-      .map((m) => `- ${typeof m === "string" ? m : m.text}`)
-      .filter((l) => l.length > 2)
-      .join("\n");
-    if (facts) {
-      messages.push({
-        role: "system",
-        content:
-          "Long-term memory — durable facts about this user and what you've built " +
-          "for them in past conversations. Use these for continuity:\n\n" + facts,
-      });
-    }
   }
   // "Model" mode (the Model button): focus the build on one self-contained Model.
   if (mode === "model") {
