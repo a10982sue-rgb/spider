@@ -627,6 +627,30 @@ local function c3(t)
 	if typeof(t) == "table" and #t >= 3 then return Color3.new(t[1], t[2], t[3]) end
 	return nil
 end
+local function v2(t)
+	if typeof(t) == "table" and #t >= 2 then return Vector2.new(t[1], t[2]) end
+	return nil
+end
+-- UDim is {scale, offset}. Accept a number too (treated as pure offset).
+local function ud(v)
+	if typeof(v) == "table" and #v >= 2 then return UDim.new(v[1], v[2]) end
+	if typeof(v) == "number" then return UDim.new(0, v) end
+	return nil
+end
+-- UDim2 accepts {sX, oX, sY, oY} OR {{sX,oX},{sY,oY}} OR {sX, sY} (scale-only).
+local function ud2(v)
+	if typeof(v) ~= "table" then return nil end
+	if #v >= 4 and typeof(v[1]) == "number" then
+		return UDim2.new(v[1], v[2], v[3], v[4])
+	end
+	if #v == 2 and typeof(v[1]) == "table" and typeof(v[2]) == "table" then
+		return UDim2.new(v[1][1] or 0, v[1][2] or 0, v[2][1] or 0, v[2][2] or 0)
+	end
+	if #v == 2 and typeof(v[1]) == "number" and typeof(v[2]) == "number" then
+		return UDim2.fromScale(v[1], v[2])
+	end
+	return nil
+end
 
 -- Resolve a dotted path starting from game. Falls back to name-based search.
 local function resolvePath(path)
@@ -702,18 +726,46 @@ local function resolveTarget(action)
 	return inst, target, err
 end
 
+-- Property-name → datatype hints, for when the live value's typeof() isn't
+-- helpful (default values can read as nil/number on some classes). Only
+-- properties commonly emitted by the AI are listed.
+local PROP_TYPE = {
+	-- UDim2
+	Size = "UDim2", Position = "UDim2", CanvasSize = "UDim2", CanvasPosition = "UDim2",
+	AbsoluteSize = "UDim2", CellSize = "UDim2", CellPadding = "UDim2",
+	-- UDim
+	CornerRadius = "UDim", PaddingTop = "UDim", PaddingBottom = "UDim",
+	PaddingLeft = "UDim", PaddingRight = "UDim", Padding = "UDim",
+	-- Color3
+	BackgroundColor3 = "Color3", BorderColor3 = "Color3", TextColor3 = "Color3",
+	TextStrokeColor3 = "Color3", PlaceholderColor3 = "Color3",
+	ImageColor3 = "Color3", Color = "Color3", Color3 = "Color3",
+	-- Vector2
+	AnchorPoint = "Vector2",
+}
+
 local function applyProps(inst, props)
 	if typeof(props) ~= "table" then return end
 	for key, value in pairs(props) do
 		local ok = pcall(function()
 			local current = inst[key]
 			local tv = typeof(current)
-			if tv == "Vector3" and typeof(value) == "table" then
-				inst[key] = v3(value)
+			-- Prefer the live property's type; fall back to PROP_TYPE for nil/defaults.
+			if tv == "nil" or tv == "number" or tv == "string" or tv == "boolean" then
+				if PROP_TYPE[key] then tv = PROP_TYPE[key] end
+			end
+			if tv == "UDim2" and typeof(value) == "table" then
+				inst[key] = ud2(value) or value
+			elseif tv == "UDim" and (typeof(value) == "table" or typeof(value) == "number") then
+				inst[key] = ud(value) or value
+			elseif tv == "Vector2" and typeof(value) == "table" then
+				inst[key] = v2(value) or value
+			elseif tv == "Vector3" and typeof(value) == "table" then
+				inst[key] = v3(value) or value
 			elseif tv == "Color3" and typeof(value) == "table" then
-				inst[key] = c3(value)
-			elseif tv == "EnumItem" and typeof(value) == "string" then
-				local enumName = tostring(current.EnumType)
+				inst[key] = c3(value) or value
+			elseif typeof(inst[key]) == "EnumItem" and typeof(value) == "string" then
+				local enumName = tostring(inst[key].EnumType)
 				inst[key] = (Enum[enumName] :: any)[value]
 			else
 				inst[key] = value

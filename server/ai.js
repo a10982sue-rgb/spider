@@ -125,36 +125,129 @@ For auto-built GUIs, use a polished modern style by default:
 
 ## GUI CONSTRUCTION REFERENCE
 
-When building GUIs, follow these rules ALWAYS. The user's game must look polished.
+When building GUIs, follow these rules ALWAYS. The user's game must look polished
+AND THE GUI MUST ACTUALLY APPEAR ON SCREEN.
+
+### MANDATORY GUI PRE-FLIGHT — verify EACH item in your "thinking" before emitting actions:
+
+1. ScreenGui parent is "StarterGui" (NOT "StarterGui.PlayerGui", NOT "Workspace",
+   NOT "PlayerGui" — just "StarterGui"). PlayerGui doesn't exist in StarterGui;
+   Roblox clones StarterGui contents into each player's PlayerGui at runtime.
+2. ScreenGui properties set explicitly: { ResetOnSpawn: false, Enabled: true,
+   ZIndexBehavior: "Sibling", IgnoreGuiInset: true }. ResetOnSpawn=false is
+   CRITICAL — without it HUDs vanish every time the player respawns.
+3. The root Frame inside the ScreenGui has BOTH a non-zero Size AND a visible
+   background (BackgroundColor3 set AND BackgroundTransparency ≤ 0.5), OR it
+   is intentionally invisible (BackgroundTransparency=1) and only its children
+   render.
+4. Every Frame/TextLabel/TextButton has Size set EXPLICITLY. Never rely on
+   defaults. A child with Size {0,0,0,0} is invisible — that is the #1 cause
+   of "GUI didn't appear".
+5. Every TextLabel/TextButton has BackgroundTransparency=1 (so it isn't a gray
+   box) UNLESS you want a visible button/chip background, in which case set
+   BackgroundColor3 AND BackgroundTransparency=0 explicitly.
+6. Every TextLabel/TextButton/TextBox has: Text, TextColor3, Font, AND
+   (TextScaled=true OR a numeric TextSize). Missing TextColor3 on a dark frame
+   = invisible black text on a black background.
+7. UICorner, UIListLayout, UIGridLayout, UIPadding, UIStroke, UISizeConstraint,
+   UIAspectRatioConstraint, UICorner are CHILDREN of the Frame they affect,
+   NEVER the parent. UICorner's parent is the Frame; the Frame is NOT the
+   UICorner's child. Get this wrong and the layout silently does nothing.
+8. Build order in actions[]: create the ScreenGui first, then its Frame
+   children, then the layout helpers (UICorner/UIListLayout/UIPadding) under
+   each Frame, then leaf TextLabels/TextButtons. Actions run in array order —
+   a child can't be parented to something that doesn't exist yet.
+9. If using UIListLayout/UIGridLayout, children get NO Position. The layout
+   positions them. They DO still need a Size.
+10. ZIndex defaults to 1 — fine for one GUI. If you have overlapping GUIs,
+    set ZIndex explicitly on the top one. Set ZIndexBehavior="Sibling" on
+    the ScreenGui so ZIndex actually works the way you expect.
+
+### MINIMAL VISIBLE-GUI PATTERN (copy this shape):
+
+create_instance { className: "ScreenGui", parent: "StarterGui", name: "HUD",
+  properties: { ResetOnSpawn: false, Enabled: true, IgnoreGuiInset: true,
+                ZIndexBehavior: "Sibling" } }
+
+create_instance { className: "Frame", parent: "StarterGui.HUD", name: "Root",
+  properties: { Size: [1,0, 1,0],                  // full-screen container
+                BackgroundTransparency: 1,         // transparent container
+                BorderSizePixel: 0 } }
+
+create_instance { className: "Frame", parent: "StarterGui.HUD.Root",
+  name: "Panel",
+  properties: { AnchorPoint: [0.5, 0.5],
+                Position: [0.5,0, 0.5,0],
+                Size: [0.4,0, 0.3,0],              // 40% × 30% of screen
+                BackgroundColor3: [0.1,0.1,0.1],
+                BackgroundTransparency: 0.15,
+                BorderSizePixel: 0 } }
+
+create_instance { className: "UICorner",
+  parent: "StarterGui.HUD.Root.Panel",
+  properties: { CornerRadius: [0, 12] } }         // UDim.new(0,12)
+
+create_instance { className: "UIPadding",
+  parent: "StarterGui.HUD.Root.Panel",
+  properties: { PaddingTop: [0,16], PaddingBottom: [0,16],
+                PaddingLeft: [0,16], PaddingRight: [0,16] } }
+
+create_instance { className: "UIListLayout",
+  parent: "StarterGui.HUD.Root.Panel",
+  properties: { Padding: [0,8], FillDirection: "Vertical",
+                HorizontalAlignment: "Center", SortOrder: "LayoutOrder" } }
+
+create_instance { className: "TextLabel",
+  parent: "StarterGui.HUD.Root.Panel", name: "Title",
+  properties: { Size: [1,0, 0,28],
+                BackgroundTransparency: 1,
+                Text: "Hello",
+                TextColor3: [0.94,0.94,0.94],
+                Font: "GothamBold", TextSize: 20,
+                TextXAlignment: "Center", LayoutOrder: 1 } }
+
+### UDim / UDim2 / Color3 EXPECTED FORMATS in properties:
+- UDim2: [scaleX, offsetX, scaleY, offsetY]  e.g. Size [0.5,0, 0,40]
+- UDim:  [scale, offset]                      e.g. CornerRadius [0, 8]
+- Color3: [r, g, b] in 0..1                   e.g. BackgroundColor3 [0.1,0.1,0.1]
+- Vector2: [x, y]                             e.g. AnchorPoint [0.5, 0.5]
+- Enums: send the enum value as a string      e.g. Font: "Gotham", ZIndexBehavior: "Sibling"
 
 ### STRUCTURE — Every ScreenGui follows this pattern:
-- ScreenGui (parent: StarterGui)
-  - Frame (container, Size = UDim2.new(1,0,1,0) or smaller)
-    - UIListLayout (or UIGridLayout/UITableLayout — NEVER manual Position)
-    - UIPadding (PaddingLeft/Right/Top/Bottom at least UDim.new(0, 12))
-    - Child Frames (buttons, labels, etc. — all within the layout)
+- ScreenGui (parent: StarterGui, ResetOnSpawn:false, Enabled:true)
+  - Frame "Root" (Size [1,0, 1,0], BackgroundTransparency 1) — transparent
+    full-screen so children can be positioned freely with AnchorPoint
+    - Sub-frames (the actual visible panels) with explicit Size + BG + UICorner
+      - UICorner / UIStroke / UIPadding / UIListLayout (helpers, as children)
+      - Leaf children: TextLabel / TextButton / ImageLabel etc.
 
-### AUTO-LAYOUT IS MANDATORY:
-- ALWAYS use UIListLayout, UIGridLayout, or UITableLayout for arranging children.
-- NEVER hardcode Position for GUI children. Let the layout handle it.
-- Use UISizeConstraint to enforce min/max sizes when needed.
+### SIZING:
+- Prefer Scale (0..1 of parent) when the GUI should be responsive.
+  Size [0.4, 0, 0.3, 0] = 40% wide × 30% tall.
+- Use Offset (pixels) for fixed-pixel chrome: Size [0, 200, 0, 40] = exactly
+  200×40 px regardless of screen.
+- Mix when needed: Size [1, -32, 0, 36] = full-width minus 32px, 36px tall.
+- AnchorPoint [0.5,0.5] + Position [0.5,0, 0.5,0] = centered. AnchorPoint
+  [1,0] + Position [1,-12, 0,12] = top-right corner with 12px margin.
 
-### SIZING — Always use Scale, not Offset, for responsive GUIs:
-- Size = UDim2.new(scaleX, 0, scaleY, 0) — the second number (offset) should be 0
-  unless you have a very specific fixed-pixel need (rare).
-- For fixed-width elements like buttons, use UDim2.new(0, 160, 0, 40).
-- AnchorPoint = Vector2.new(0.5, 0.5) with Position = UDim2.new(0.5, 0, 0.5, 0) centers.
+### EVERY Frame INTENDED TO BE VISIBLE GETS:
+- Explicit Size (non-zero)
+- BackgroundColor3 set
+- BackgroundTransparency between 0 and 0.5
+- BorderSizePixel: 0  (the legacy 1-px border looks broken; use UIStroke instead)
+- UICorner child (CornerRadius UDim.new(0, 8..12)) — square corners look amateur
+- Optional UIStroke child (Thickness 1, Color near white, Transparency 0.7..0.85)
 
-### EVERY FRAME GETS:
-- UICorner: CornerRadius = UDim.new(0, 8) — rounded corners, NEVER square
-- Optional: UIStroke for a border (Thickness = 1, Color = white or accent,
-  Transparency = 0.8)
-
-### EVERY TEXT GETS:
-- A readable font: Font = Enum.Font.Gotham (or GothamMedium, GothamBold)
-- NEVER use Enum.Font.Legacy — it renders badly
-- TextScaled = true OR a sensible TextSize (14-24 depending on element)
-- TextColor3 near white on dark backgrounds, dark on light backgrounds
+### EVERY TEXT NODE GETS:
+- Text (set it — empty string = invisible label)
+- Font: "Gotham", "GothamMedium", "GothamBold", or "GothamBlack"
+- TextSize (14..24) OR TextScaled = true
+- TextColor3 (light on dark, dark on light)
+- BackgroundTransparency = 1 unless it's a button with its own background
+- TextXAlignment / TextYAlignment as needed ("Left", "Center", "Right" /
+  "Top", "Center", "Bottom")
+- For TextButtons that should look like buttons: also set AutoButtonColor
+  = true and give the button a BackgroundColor3 + UICorner.
 
 ### COLOR PALETTE — use these [R,G,B] 0-1 arrays:
 - Background charcoal: [0.1, 0.1, 0.1]
@@ -168,56 +261,83 @@ When building GUIs, follow these rules ALWAYS. The user's game must look polishe
 
 ### COMMON GUI TEMPLATES:
 
-**Notification Banner** (top of screen, slides in):
-- Frame: AnchorPoint [0.5,0], Position UDim2.new(0.5,0, 0,10),
-  Size UDim2.new(0.7,0, 0,40)
-  - UICorner(8), UIStroke(1, white, 0.75), UIPadding(12,4,12,4)
-  - UIListLayout: FillDirection = Horizontal, VerticalAlignment = Center
-  - TextLabel "NOTICE" in GothamBold 14, accent color, Size UDim2.new(0,120, 1,0)
-  - TextLabel for message in Gotham 13, Size UDim2.new(1,0, 1,0)
+**Notification Banner** (top of screen):
+- ScreenGui "Notifier" in StarterGui (ResetOnSpawn:false, IgnoreGuiInset:true)
+  - Frame "Banner": AnchorPoint [0.5,0], Position [0.5,0, 0,10],
+    Size [0, 480, 0, 44],
+    BackgroundColor3 [0.08,0.08,0.08], BackgroundTransparency 0.1,
+    BorderSizePixel 0
+    - UICorner [0,10], UIStroke (1, white, 0.8)
+    - UIPadding [0,12 each side]
+    - UIListLayout: FillDirection "Horizontal", VerticalAlignment "Center",
+      Padding [0,8]
+    - TextLabel "Tag": Size [0,90, 1,0], BackgroundTransparency 1,
+      Font "GothamBold", TextSize 14, TextColor3 [0,0.9,1], Text "NOTICE",
+      TextXAlignment "Left"
+    - TextLabel "Msg": Size [1,-98, 1,0], BackgroundTransparency 1,
+      Font "Gotham", TextSize 14, TextColor3 [0.94,0.94,0.94],
+      Text "<message>", TextXAlignment "Left", TextWrapped true
 
 **Scoreboard** (right side):
-- Frame: Position UDim2.new(1,-220, 0.5,-150), Size UDim2.new(0,200, 0,300)
-  - UICorner(8), UIStroke(1, white, 0.8)
-  - UIPadding(12), UIListLayout: Padding = UDim.new(0, 4)
-  - TextLabel "SCOREBOARD" header: GothamBold 16, accent color
-  - Frame per player row: Size UDim2.new(1,0, 0,28),
-    UIListLayout: Horizontal
-    - TextLabel (name): Size UDim2.new(0.6,0, 1,0), TextXAlignment = Left
-    - TextLabel (score): Size UDim2.new(0.4,0, 1,0), TextXAlignment = Right
+- ScreenGui "Scoreboard" in StarterGui (ResetOnSpawn:false)
+  - Frame "Panel": AnchorPoint [1,0.5], Position [1,-12, 0.5,0],
+    Size [0,220, 0,320], BackgroundColor3 [0.08,0.08,0.08],
+    BackgroundTransparency 0.1, BorderSizePixel 0
+    - UICorner [0,10], UIStroke (1, white, 0.8), UIPadding [0,12]
+    - UIListLayout: FillDirection "Vertical", Padding [0,4],
+      SortOrder "LayoutOrder"
+    - TextLabel "Header": Size [1,0, 0,28], BackgroundTransparency 1,
+      Font "GothamBold", TextSize 16, TextColor3 [0,0.9,1],
+      Text "SCOREBOARD", LayoutOrder 1
+    - Frame "Row" (template — script clones it per player):
+      Size [1,0, 0,26], BackgroundTransparency 1
+        - UIListLayout: FillDirection "Horizontal"
+        - TextLabel name: Size [0.6,0, 1,0], BG transparent, TextXAlignment "Left"
+        - TextLabel score: Size [0.4,0, 1,0], BG transparent, TextXAlignment "Right"
 
 **Shop Grid** (center):
-- Frame: AnchorPoint [0.5,0.5], Position UDim2.new(0.5,0, 0.5,0)
-  - UICorner(12), UIStroke(1), UIPadding(16)
-  - UIGridLayout: CellSize UDim2.new(0,160, 0,180), FillDirectionMaxCells = 3
-  - Per item Frame: UICorner(8), UIStroke(1), UIListLayout: Vertical
-    - ImageLabel (icon): Size UDim2.new(1,0, 0.55,0)
-    - TextLabel (name): GothamBold 13
-    - TextLabel (price): Gotham 12, accent color
-    - TextButton "Buy": Size UDim2.new(1,0, 0,30), accent background
+- ScreenGui "Shop" in StarterGui (ResetOnSpawn:false, IgnoreGuiInset:true,
+  Enabled:false ← shop is hidden by default; a script toggles Enabled=true
+  when the player opens it)
+  - Frame "Panel": AnchorPoint [0.5,0.5], Position [0.5,0, 0.5,0],
+    Size [0.6,0, 0.7,0], BackgroundColor3 [0.05,0.05,0.05],
+    BackgroundTransparency 0.05, BorderSizePixel 0
+    - UICorner [0,14], UIStroke (1, white, 0.85), UIPadding [0,16]
+    - UIGridLayout: CellSize [0,160, 0,200], CellPadding [0,12, 0,12]
+    - Per item Frame: BackgroundColor3 [0.1,0.1,0.1], BorderSizePixel 0
+      - UICorner [0,8], UIListLayout vertical, UIPadding [0,8]
+      - ImageLabel icon: Size [1,0, 0.55,0], BG transparent
+      - TextLabel name: Size [1,0, 0,18], BG transparent, Font "GothamBold"
+      - TextLabel price: Size [1,0, 0,16], BG transparent, TextColor3 [0,0.9,1]
+      - TextButton Buy: Size [1,0, 0,28], BackgroundColor3 [0,0.9,1],
+        TextColor3 [0.05,0.05,0.05], Font "GothamBold", Text "Buy",
+        UICorner child [0,6]
 
-**Settings Panel** (left side):
-- Frame: Position UDim2.new(0,10, 0.5,-200), Size UDim2.new(0.35,0, 0,400)
-  - UICorner(8), UIStroke(1), UIPadding(16)
-  - UIListLayout: Padding = UDim.new(0, 10)
-  - TextLabel "SETTINGS": GothamBold 18
-  - Per setting Frame: UIListLayout Horizontal, VerticalAlignment Center
-    - TextLabel (label): Size UDim2.new(0.4,0, 1,0)
-    - TextBox or TextButton (value): Size UDim2.new(0.6,0, 1,0)
-
-**Health Bar** (over character):
-- Frame (background): AnchorPoint [0.5,0.5], Size UDim2.new(0.3,0, 0,14)
-  - UICorner(4), BackgroundColor3 dark red [0.4,0,0]
-- Frame (fill): AnchorPoint [0,0.5], Size UDim2.new(fraction,0, 1,0),
-  BackgroundColor3 green [0,0.85,0.1], UICorner(4),
-  parented to the background Frame
-- TextLabel "HP: 70/100": Size UDim2.new(1,0, 1,0), centered, TextScaled
+**Health Bar** (HUD, bottom-center):
+- ScreenGui "HealthHUD" in StarterGui (ResetOnSpawn:false ← MANDATORY for HUDs)
+  - Frame "BarBG": AnchorPoint [0.5,1], Position [0.5,0, 1,-30],
+    Size [0,320, 0,18], BackgroundColor3 [0.25,0.04,0.04],
+    BorderSizePixel 0
+    - UICorner [1,0] (pill shape)
+    - Frame "Fill": AnchorPoint [0,0.5], Position [0,0, 0.5,0],
+      Size [1,0, 1,0]  ← LocalScript animates Size.X.Scale 0..1 each frame,
+      BackgroundColor3 [0.1,0.85,0.2], BorderSizePixel 0
+      - UICorner [1,0]
+    - TextLabel "Text": Size [1,0, 1,0], BackgroundTransparency 1,
+      Font "GothamBold", TextSize 12, TextColor3 [1,1,1],
+      Text "HP 100", TextScaled false, ZIndex 2
 
 ### WHAT NEVER TO DO for GUIs:
-- X Do NOT use manual Position for GUI children in a list — use layouts
+- X Do NOT parent the ScreenGui anywhere other than "StarterGui"
+- X Do NOT omit ResetOnSpawn=false on persistent HUDs — they vanish on respawn
+- X Do NOT leave Size at default (0,0,0,0) — it renders as invisible
+- X Do NOT leave a Frame fully transparent AND empty — you'll see nothing
+- X Do NOT put UICorner/UIListLayout/UIPadding ABOVE the Frame they style;
+  they go INSIDE it
+- X Do NOT use manual Position for GUI children of a UIListLayout/UIGridLayout
 - X Do NOT use Offset for sizing when Scale works (almost always)
 - X Do NOT use Enum.Font.Legacy
-- X Do NOT forget UICorner on frames — square frames look amateur
+- X Do NOT forget UICorner on visible frames — square frames look amateur
 - X Do NOT forget UIPadding on containers — text touching edges looks broken
 - X Do NOT create GUIs in Workspace — ScreenGuis go in StarterGui
 - X Do NOT insert free-model GUI kits unless the user explicitly asks for one
