@@ -385,7 +385,7 @@ function salvageJson(text) {
 // Fires onReason(chunk) for each native reasoning delta.
 // `signal` (optional AbortSignal) cancels the in-flight fetch + stream so we
 // stop burning tokens the moment the client clicks Stop.
-async function streamOnce({ apiKey, model, messages, onReason, think, signal }) {
+export async function streamOnce({ apiKey, model, messages, onReason, think, signal }) {
   const mode = THINK_MODES[think] || THINK_MODES.medium;
   const body = {
     model,

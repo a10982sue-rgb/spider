@@ -159,6 +159,14 @@ $("webSearchBtn").addEventListener("click", () => {
   $("chatInput").focus();
 });
 
+// Optimize prompt drawer
+$("optimizeBtn").addEventListener("click", () => {
+  const current = $("chatInput").value.trim();
+  if (current) $("optimizeInput").value = current;
+  openDrawer("optimizeDrawer");
+  $("optimizeInput").focus();
+});
+
 // ---- composer: attachments ------------------------------------------------
 $("attachBtn").addEventListener("click", () => $("fileInput").click());
 $("fileInput").addEventListener("change", (e) => {
@@ -597,6 +605,7 @@ function timeAgo(ts) {
 function openDrawer(id) { $(id).hidden = false; $("drawerScrim").hidden = false; }
 function closeDrawers() {
   $("historyDrawer").hidden = true;
+  $("optimizeDrawer").hidden = true;
   $("drawerScrim").hidden = true;
 }
 $("drawerScrim").addEventListener("click", closeDrawers);
@@ -668,6 +677,38 @@ async function loadConversation(id) {
     closeDrawers();
   } catch (e) { flash("Couldn't open that chat: " + e.message); }
 }
+
+// ---- optimize drawer logic -------------------------------------------------
+$("optimizeRun").addEventListener("click", async () => {
+  const prompt = $("optimizeInput").value.trim();
+  if (!prompt) return;
+  const btn = $("optimizeRun");
+  btn.disabled = true;
+  btn.textContent = "Optimizing…";
+  $("optimizeError").hidden = true;
+  $("optimizeResultArea").hidden = true;
+  try {
+    const { optimized } = await post("/api/optimize", { linkId: state.linkId, prompt });
+    $("optimizeOutput").value = optimized;
+    $("optimizeResultArea").hidden = false;
+  } catch (e) {
+    $("optimizeError").textContent = e.message;
+    $("optimizeError").hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Optimize";
+  }
+});
+
+$("optimizeUse").addEventListener("click", () => {
+  const optimized = $("optimizeOutput").value.trim();
+  if (optimized) {
+    $("chatInput").value = optimized;
+    autoGrow();
+    $("chatInput").focus();
+  }
+  closeDrawers();
+});
 
 // ---- fetch helpers --------------------------------------------------------
 async function post(url, body) {

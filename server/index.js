@@ -5,7 +5,7 @@ import {
   createLink, getLink, getLinkByCode, getLinkByToken,
   confirmLink, queueActions, drainQueue, setContext,
 } from "./store.js";
-import { runChat } from "./ai.js";
+import { runChat, streamOnce } from "./ai.js";
 import {
   registerAuthRoutes, requireUser, currentUser, authConfigured,
 } from "./auth.js";
@@ -360,6 +360,44 @@ app.post("/api/chat", async (req, res) => {
   } finally {
     res.off("close", onResClose);
     res.end();
+  }
+});
+
+// Optimize a rough user prompt into a clearer, more specific Roblox build
+// prompt. Fast, free utility — uses think=off, no credit charge.
+app.post("/api/optimize", async (req, res) => {
+  const link = requireWebSession(req, res);
+  if (!link) return;
+  if (!link.apiKey) return res.status(400).json({ error: "no API key set for this session" });
+
+  const prompt = (req.body?.prompt || "").toString().trim();
+  if (!prompt) return res.status(400).json({ error: "empty prompt" });
+
+  try {
+    const { content } = await streamOnce({
+      apiKey: link.apiKey,
+      model: link.model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a prompt optimizer for a Roblox Studio AI builder. " +
+            "The user will give you a rough idea. Rewrite it into a clearer, more specific prompt " +
+            "that will produce a great Roblox build. Follow these rules:\n" +
+            "- Add relevant Roblox context (service names, class names, common patterns) where appropriate.\n" +
+            "- Structure multi-part requests into numbered steps or clear sections.\n" +
+            "- Be specific about what to build, where to place it, and how it should behave.\n" +
+            "- Keep it concise — do not over-engineer.\n" +
+            "- Return ONLY the improved prompt text. No markdown fences, no JSON wrapper, no preamble.",
+        },
+        { role: "user", content: `Improve this prompt:\n\n${prompt}` },
+      ],
+      think: "off",
+    });
+    const optimized = (content || "").trim() || prompt;
+    res.json({ optimized });
+  } catch (err) {
+    res.status(502).json({ error: String(err.message || err) });
   }
 });
 

@@ -159,6 +159,10 @@
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                 <span>Web</span>
               </button>
+              <button type="button" id="optimizeBtn" class="mode-btn" title="Optimize your prompt before sending — AI makes it clearer and more specific">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                <span>Optimize</span>
+              </button>
               <label class="think-select" title="How hard the model reasons before answering">
                 <span class="ts-ico">🧠</span>
                 <select id="thinkMode">
@@ -191,6 +195,23 @@
     </div>
 
     <div class="drawer-scrim" id="drawerScrim" hidden></div>
+
+    <!-- OPTIMIZE DRAWER -->
+    <div class="drawer" id="optimizeDrawer" hidden>
+      <div class="drawer-head">
+        <h3>Optimize Prompt</h3>
+        <button class="drawer-x" data-close="optimizeDrawer">✕</button>
+      </div>
+      <p class="drawer-hint">Paste a rough idea — the AI rewrites it into a clear, specific prompt for better builds.</p>
+      <textarea id="optimizeInput" class="opt-input" rows="4" placeholder="e.g. make a cool game where you fight enemies and get stronger"></textarea>
+      <button id="optimizeRun" class="primary opt-run">Optimize</button>
+      <div class="opt-error" id="optimizeError" hidden></div>
+      <div class="opt-result-area" id="optimizeResultArea" hidden>
+        <label class="opt-label" for="optimizeOutput">Optimized prompt (editable)</label>
+        <textarea id="optimizeOutput" class="opt-output" rows="5"></textarea>
+        <button id="optimizeUse" class="primary opt-use">Use this →</button>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>
