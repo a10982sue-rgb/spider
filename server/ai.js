@@ -827,8 +827,13 @@ function extractLightningText(data) {
 }
 
 export async function runChatLightning({ history, thinkMode, context, mode, webSearch, onThinking, onStatus, signal }) {
-  if (!process.env.LIGHTNING_AUTH) {
-    throw new Error("LIGHTNING_AUTH is not set on the server");
+  const apiKey = (process.env.LIGHTNING_API_KEY || "").trim();
+  const authRaw = (process.env.LIGHTNING_AUTH || "").trim();
+  const gridUser = (process.env.LIGHTNING_USER_ID || "").trim();
+  if (!apiKey && !authRaw) {
+    throw new Error(
+      "Set LIGHTNING_API_KEY (sk-lit-...) or LIGHTNING_AUTH (Bearer eyJ...) on the server",
+    );
   }
 
   const sections = [];
@@ -871,12 +876,20 @@ export async function runChatLightning({ history, thinkMode, context, mode, webS
     try { onStatus("Calling Opus 4.8…"); } catch {}
   }
 
+  const headers = { "Content-Type": "application/json" };
+  if (apiKey) {
+    headers["X-Grid-Key"] = apiKey;
+    if (gridUser) headers["X-Grid-User"] = gridUser;
+  }
+  if (authRaw) {
+    // Accept either "Bearer xxx" or raw "eyJxxx" — auto-prefix raw JWTs.
+    const isJwt = /^eyJ[A-Za-z0-9_-]+\./.test(authRaw);
+    headers["Authorization"] = (isJwt && !/^Bearer\s/i.test(authRaw)) ? `Bearer ${authRaw}` : authRaw;
+  }
+
   const res = await fetch(LIGHTNING_URL, {
     method: "POST",
-    headers: {
-      Authorization: process.env.LIGHTNING_AUTH,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       conversationId: "",
       autoName: false,
