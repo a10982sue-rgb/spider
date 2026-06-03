@@ -766,3 +766,175 @@ function sanitizePlan(p) {
   if (!title || steps.length === 0) return null;
   return { title, summary, steps, ideas };
 }
+
+// === LIGHTNING (Opus 4.8) ==================================================
+// Lightning agents are non-streaming and conversation-scoped server-side. We
+// pack SYSTEM_PROMPT + mode flags + snapshot + transcript + current turn into
+// a single message each call (fresh conversationId), then parse the response
+// the same way as FreeModel so the rest of the pipeline doesn't care which
+// upstream answered.
+
+const LIGHTNING_URL =
+  "https://lightning.ai/v1/agents/ast_01ksqss5398znf78kqe6jfsz3d/conversations";
+const LIGHTNING_BILLING_PROJECT_ID = "01kt6g1tfknwhm01rn9vbrch7g";
+
+function flattenMessageText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const out = [];
+  for (const part of content) {
+    if (typeof part === "string") { out.push(part); continue; }
+    if (part?.type === "text" && typeof part.text === "string") { out.push(part.text); continue; }
+    if (part?.type === "image_url") { out.push("[image attached]"); continue; }
+  }
+  return out.join("\n");
+}
+
+function extractLightningText(data) {
+  if (!data) return "";
+  const visit = (msg) => {
+    if (!msg) return "";
+    if (typeof msg === "string") return msg;
+    if (typeof msg.text === "string") return msg.text;
+    if (Array.isArray(msg.content)) {
+      const chunks = [];
+      for (const c of msg.content) {
+        if (typeof c === "string") { chunks.push(c); continue; }
+        if (Array.isArray(c?.parts)) {
+          chunks.push(c.parts.filter((p) => typeof p === "string").join(""));
+          continue;
+        }
+        if (typeof c?.text === "string") { chunks.push(c.text); continue; }
+      }
+      if (chunks.length) return chunks.join("");
+    }
+    return "";
+  };
+
+  const tryFields = [data.message, data.response, data.reply, data.output];
+  for (const f of tryFields) {
+    const t = visit(f);
+    if (t) return t;
+  }
+  if (Array.isArray(data.messages) && data.messages.length) {
+    const last = data.messages[data.messages.length - 1];
+    const t = visit(last);
+    if (t) return t;
+  }
+  if (typeof data.content === "string") return data.content;
+  if (typeof data.text === "string") return data.text;
+  return "";
+}
+
+export async function runChatLightning({ history, thinkMode, context, mode, webSearch, onThinking, onStatus, signal }) {
+  if (!process.env.LIGHTNING_AUTH) {
+    throw new Error("LIGHTNING_AUTH is not set on the server");
+  }
+
+  const sections = [];
+  sections.push("=== SYSTEM PROMPT ===\n" + SYSTEM_PROMPT);
+  if (webSearch) {
+    sections.push(
+      "=== WEB SEARCH ===\nYou may search the web when up-to-date info is needed.",
+    );
+  }
+  if (mode === "model") {
+    sections.push(
+      "=== MODEL MODE ===\nCreate ONE self-contained Model under Workspace; " +
+      "build all parts as children of it; anchor parts; set a PrimaryPart-worthy base.",
+    );
+  }
+  if (typeof context === "string" && context.trim()) {
+    sections.push("=== ROBLOX PLACE SNAPSHOT ===\n" + context);
+  }
+
+  const turns = Array.isArray(history) ? history.slice() : [];
+  const currentTurn = turns.pop();
+  if (turns.length) {
+    const transcript = turns
+      .map((m) => `--- ${String(m.role || "user").toUpperCase()} ---\n${flattenMessageText(m.content)}`)
+      .join("\n\n");
+    sections.push("=== PRIOR TURNS ===\n" + transcript);
+  }
+  sections.push("=== CURRENT USER TURN ===\n" + flattenMessageText(currentTurn?.content || ""));
+  if (thinkMode && thinkMode !== "medium") {
+    sections.push(`=== THINKING EFFORT ===\n${thinkMode}`);
+  }
+  sections.push(
+    "=== OUTPUT CONTRACT ===\nReturn ONLY the single JSON object specified above " +
+    "(thinking / reply / plan / actions). No markdown fences, no prose around it.",
+  );
+
+  const packed = sections.join("\n\n");
+
+  if (typeof onStatus === "function") {
+    try { onStatus("Calling Opus 4.8…"); } catch {}
+  }
+
+  const res = await fetch(LIGHTNING_URL, {
+    method: "POST",
+    headers: {
+      Authorization: process.env.LIGHTNING_AUTH,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      conversationId: "",
+      autoName: false,
+      stream: false,
+      billingProjectId: LIGHTNING_BILLING_PROJECT_ID,
+      message: {
+        author: { role: "user" },
+        content: [{ contentType: "text", parts: [packed] }],
+      },
+    }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Lightning ${res.status}: ${detail.slice(0, 500)}`);
+  }
+
+  const data = await res.json().catch(() => ({}));
+  const content = extractLightningText(data);
+
+  let parsed = extractJson(content);
+  let salvaged = false;
+  if (!parsed || typeof parsed !== "object") {
+    parsed = salvageJson(content);
+    salvaged = !!parsed;
+  }
+
+  if (!parsed) {
+    return {
+      thinking: "",
+      reply: content || "(no response)",
+      actions: [],
+      plan: null,
+      raw: content,
+      salvaged: false,
+      truncated: false,
+    };
+  }
+
+  const reply = typeof parsed.reply === "string" ? parsed.reply : "";
+  const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
+  const plan = sanitizePlan(parsed.plan);
+  const thinking = typeof parsed.thinking === "string" ? parsed.thinking : "";
+
+  if (thinking && typeof onThinking === "function") {
+    try { onThinking(thinking); } catch {}
+  }
+
+  return {
+    thinking,
+    reply: reply || (plan
+      ? "I made a plan — pick the optional extras and click Build."
+      : actions.length ? "(done)" : "(no response)"),
+    actions,
+    plan,
+    raw: content,
+    salvaged,
+    truncated: false,
+  };
+}
