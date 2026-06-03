@@ -614,6 +614,7 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
   let content = "";
   let reasoning = "";
   let finishReason = null;
+  let actualModel = null;
   const decoder = new TextDecoder();
   let buffer = "";
   for await (const chunk of res.body) {
@@ -627,6 +628,7 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
       if (payload === "[DONE]") continue;
       let json;
       try { json = JSON.parse(payload); } catch { continue; }
+      if (!actualModel && typeof json?.model === "string") actualModel = json.model;
       const choice = json?.choices?.[0] || {};
       const delta = choice.delta || {};
       if (typeof delta.content === "string") content += delta.content;
@@ -635,7 +637,7 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
       if (choice.finish_reason) finishReason = choice.finish_reason;
     }
   }
-  return { content, reasoning, finishReason };
+  return { content, reasoning, finishReason, actualModel };
 }
 
 export async function runChat({ apiKey, model, history, thinkMode, context, mode, webSearch, onThinking, onStatus, signal, baseUrl, withReasoning = true }) {
@@ -690,11 +692,13 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
 
   let content = "";
   let reasoning = "";
+  let actualModel = null;
 
   // Initial call.
   let r = await streamOnce({ apiKey, model, messages, onReason: emit, think, signal, baseUrl, withReasoning });
   content += r.content;
   reasoning += r.reasoning;
+  if (r.actualModel) actualModel = r.actualModel;
 
   // Auto-continue if the model ran out of room on a big build.
   let continuations = 0;
@@ -729,7 +733,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
 
   if (!parsed) {
     // Not JSON at all — treat the whole thing as a chat reply.
-    return { thinking: reasoning, reply: content || "(no response)", actions: [], plan: null, truncated: r.finishReason === "length" };
+    return { thinking: reasoning, reply: content || "(no response)", actions: [], plan: null, truncated: r.finishReason === "length", actualModel };
   }
 
   const reply = typeof parsed.reply === "string" ? parsed.reply : "";
@@ -748,6 +752,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
     raw: content,
     salvaged,
     truncated: r.finishReason === "length",
+    actualModel,
   };
 }
 
@@ -779,20 +784,32 @@ function sanitizePlan(p) {
 // authenticated with sk-lit-... API keys. Same wire protocol as FreeModel,
 // so we delegate to runChat with the upstream overridden. reasoning_effort
 // is suppressed because Anthropic models on Lightning don't accept it.
+// The model id can be overridden with LIGHTNING_MODEL — Lightning's catalog
+// uses provider-prefixed slugs (e.g. "anthropic/claude-opus-4-8").
 
 const LIGHTNING_BASE_URL = "https://lightning.ai/api/v1";
-const LIGHTNING_MODEL = "anthropic/claude-opus-4-8";
+const LIGHTNING_DEFAULT_MODEL = "anthropic/claude-opus-4-8";
 
 export async function runChatLightning(opts) {
   const apiKey = (process.env.LIGHTNING_API_KEY || "").trim();
   if (!apiKey) {
     throw new Error("LIGHTNING_API_KEY is not set on the server");
   }
-  return runChat({
+  const requested = (process.env.LIGHTNING_MODEL || LIGHTNING_DEFAULT_MODEL).trim();
+  const origStatus = opts.onStatus;
+  const onStatus = (s) => { if (typeof origStatus === "function") { try { origStatus(s); } catch {} } };
+  const result = await runChat({
     ...opts,
     apiKey,
-    model: LIGHTNING_MODEL,
+    model: requested,
     baseUrl: LIGHTNING_BASE_URL,
     withReasoning: false,
+    onStatus,
   });
+  if (result.actualModel && !result.actualModel.toLowerCase().includes(requested.split("/").pop().toLowerCase())) {
+    const msg = `Lightning routed to "${result.actualModel}" instead of "${requested}". Check your Lightning model catalog.`;
+    console.warn("[lightning]", msg);
+    onStatus(msg);
+  }
+  return result;
 }
