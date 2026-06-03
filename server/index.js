@@ -60,6 +60,36 @@ app.post("/api/intro-seen", requireUser, (req, res) => {
   res.json({ ok: true });
 });
 
+// Diagnostic: hits Lightning with the env key the same way curl would, so we
+// can see whether the key in env is reaching the upstream correctly.
+app.get("/api/lightning/diag", async (req, res) => {
+  const key = (process.env.LIGHTNING_API_KEY || "").trim();
+  if (!key) return res.status(500).json({ ok: false, error: "LIGHTNING_API_KEY not set" });
+  const model = (process.env.LIGHTNING_MODEL || "anthropic/claude-opus-4-8").trim();
+  try {
+    const upstream = await fetch("https://lightning.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: [{ type: "text", text: "Reply with the literal word: pong" }] }],
+      }),
+    });
+    const text = await upstream.text();
+    res.status(200).json({
+      keyPrefix: `${key.slice(0, 10)}…${key.slice(-4)}`,
+      keyLength: key.length,
+      keyHasWhitespace: /\s/.test(key),
+      keyHasNonAscii: /[^\x20-\x7e]/.test(key),
+      model,
+      upstreamStatus: upstream.status,
+      upstreamBody: text.slice(0, 1500),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 // === CONVERSATION HISTORY (per Discord user, persistent) ===================
 
 // List the user's past conversations (summaries only).

@@ -595,6 +595,10 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
   const url = baseUrl
     ? `${baseUrl.replace(/\/+$/, "")}/chat/completions`
     : `${BASE_URL}/v1/chat/completions`;
+  if (baseUrl) {
+    const masked = apiKey ? `${apiKey.slice(0, 10)}…${apiKey.slice(-4)}` : "(empty)";
+    console.log(`[upstream] POST ${url} model=${model} authPrefix=${masked} len=${apiKey?.length}`);
+  }
   const res = await fetch(url, {
     method: "POST",
     headers: {
