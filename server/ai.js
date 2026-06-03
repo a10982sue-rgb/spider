@@ -784,9 +784,10 @@ function sanitizePlan(p) {
 }
 
 // === KIRO (xn--vduyey89e.com) ==============================================
-// OpenAI-compatible endpoint. Plain-chat: no JSON action protocol, no place
-// snapshot, no reasoning_effort. The model just answers the user's message and
-// we return the raw text as `reply`. No build actions are emitted.
+// OpenAI-compatible endpoint that exposes claude-opus-4-8 under four routing
+// tags. Same wire protocol as FreeModel/Lightning, so we delegate to runChat
+// with the upstream and key overridden. reasoning_effort is suppressed —
+// Anthropic models on this gateway reject the field.
 
 const KIRO_BASE_URL = (process.env.KIRO_BASE_URL || "https://xn--vduyey89e.com").replace(/\/+$/, "");
 const KIRO_DEFAULT_KEY = "sk-oQNftENsrc1Ccym8ixlAsDC0wcHCkeeBlHqCi7VnZZS6jfX0";
@@ -802,82 +803,18 @@ export function isKiroModel(id) {
   return typeof id === "string" && Object.prototype.hasOwnProperty.call(KIRO_MODELS, id);
 }
 
-export async function runChatKiro({ history, signal, onThinking, onStatus, model }) {
+export async function runChatKiro(opts) {
   const apiKey = (process.env.KIRO_API_KEY || KIRO_DEFAULT_KEY).trim();
-  const upstreamModel = KIRO_MODELS[model] || KIRO_MODELS["kiro-high"];
-
-  // Strip vision/multimodal parts — this upstream is text-only here. Flatten
-  // multimodal content arrays into the text portion only.
-  const messages = (Array.isArray(history) ? history : []).map((m) => {
-    if (!m || typeof m !== "object") return m;
-    if (typeof m.content === "string") return { role: m.role, content: m.content };
-    if (Array.isArray(m.content)) {
-      const text = m.content
-        .filter((p) => p && p.type === "text" && typeof p.text === "string")
-        .map((p) => p.text)
-        .join("\n");
-      return { role: m.role, content: text };
-    }
-    return { role: m.role, content: String(m.content ?? "") };
+  const upstreamModel = KIRO_MODELS[opts.model] || KIRO_MODELS["kiro-high"];
+  // Kiro's path is `/v1/chat/completions`; runChat appends `/chat/completions`
+  // to the supplied baseUrl, so pass the `/v1` prefix here.
+  return runChat({
+    ...opts,
+    apiKey,
+    model: upstreamModel,
+    baseUrl: `${KIRO_BASE_URL}/v1`,
+    withReasoning: false,
   });
-
-  const status = (s) => { if (typeof onStatus === "function") { try { onStatus(s); } catch {} } };
-  status("Talking to model…");
-
-  const res = await fetch(`${KIRO_BASE_URL}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: upstreamModel,
-      messages,
-      stream: true,
-    }),
-    signal,
-  });
-
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Kiro ${res.status}: ${detail.slice(0, 500)}`);
-  }
-
-  let content = "";
-  let actualModel = null;
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const emit = (txt) => { if (txt && typeof onThinking === "function") { try { onThinking(txt); } catch {} } };
-
-  for await (const chunk of res.body) {
-    buffer += decoder.decode(chunk, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const payload = trimmed.slice(5).trim();
-      if (payload === "[DONE]") continue;
-      let json;
-      try { json = JSON.parse(payload); } catch { continue; }
-      if (!actualModel && typeof json?.model === "string") actualModel = json.model;
-      const delta = json?.choices?.[0]?.delta || {};
-      if (typeof delta.content === "string" && delta.content) {
-        content += delta.content;
-        emit(delta.content);
-      }
-    }
-  }
-
-  return {
-    thinking: "",
-    reply: content.trim() || "(no response)",
-    actions: [],
-    plan: null,
-    truncated: false,
-    salvaged: false,
-    actualModel,
-  };
 }
 
 // === LIGHTNING (Opus 4.8) ==================================================
