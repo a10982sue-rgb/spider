@@ -39,13 +39,6 @@ services:
       - key: UPSTASH_REDIS_REST_TOKEN
         sync: false
       # Lightning AI — required for the opus-4.8 model option.
-      # Set ONE of these (or both — API key wins):
-      #   LIGHTNING_API_KEY  → sk-lit-... (preferred, doesn't expire weekly)
-      #   LIGHTNING_USER_ID  → optional companion to the API key (X-Grid-User)
-      #   LIGHTNING_AUTH     → "Bearer eyJ..." fallback for a user-session JWT
+      # sk-lit-... API key from your Lightning account.
       - key: LIGHTNING_API_KEY
-        sync: false
-      - key: LIGHTNING_USER_ID
-        sync: false
-      - key: LIGHTNING_AUTH
         sync: false

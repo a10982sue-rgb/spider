@@ -577,7 +577,10 @@ function salvageJson(text) {
 // Fires onReason(chunk) for each native reasoning delta.
 // `signal` (optional AbortSignal) cancels the in-flight fetch + stream so we
 // stop burning tokens the moment the client clicks Stop.
-export async function streamOnce({ apiKey, model, messages, onReason, think, signal }) {
+// `baseUrl` (optional) overrides the FreeModel URL for OpenAI-compatible
+// upstreams (e.g. Lightning). `withReasoning` controls whether the
+// reasoning_effort field is sent — some upstreams reject unknown fields.
+export async function streamOnce({ apiKey, model, messages, onReason, think, signal, baseUrl, withReasoning = true }) {
   const mode = THINK_MODES[think] || THINK_MODES.medium;
   const body = {
     model,
@@ -587,9 +590,12 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
     stream: true,
   };
   // Off = no reasoning at all; otherwise request the effort level.
-  if (think !== "off") body.reasoning_effort = mode.effort;
+  if (withReasoning && think !== "off") body.reasoning_effort = mode.effort;
 
-  const res = await fetch(`${BASE_URL}/v1/chat/completions`, {
+  const url = baseUrl
+    ? `${baseUrl.replace(/\/+$/, "")}/chat/completions`
+    : `${BASE_URL}/v1/chat/completions`;
+  const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -601,7 +607,8 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new Error(`FreeModel ${res.status}: ${detail.slice(0, 500)}`);
+    const tag = baseUrl ? "Upstream" : "FreeModel";
+    throw new Error(`${tag} ${res.status}: ${detail.slice(0, 500)}`);
   }
 
   let content = "";
@@ -631,7 +638,7 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
   return { content, reasoning, finishReason };
 }
 
-export async function runChat({ apiKey, model, history, thinkMode, context, mode, webSearch, onThinking, onStatus, signal }) {
+export async function runChat({ apiKey, model, history, thinkMode, context, mode, webSearch, onThinking, onStatus, signal, baseUrl, withReasoning = true }) {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
   ];
@@ -685,7 +692,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   let reasoning = "";
 
   // Initial call.
-  let r = await streamOnce({ apiKey, model, messages, onReason: emit, think, signal });
+  let r = await streamOnce({ apiKey, model, messages, onReason: emit, think, signal, baseUrl, withReasoning });
   content += r.content;
   reasoning += r.reasoning;
 
@@ -707,7 +714,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
         "any text already sent and do not restart the object — just resume the " +
         "raw characters." },
     ];
-    r = await streamOnce({ apiKey, model, messages: followUp, onReason: emit, think, signal });
+    r = await streamOnce({ apiKey, model, messages: followUp, onReason: emit, think, signal, baseUrl, withReasoning });
     content += r.content;
     reasoning += r.reasoning;
   }
@@ -768,186 +775,24 @@ function sanitizePlan(p) {
 }
 
 // === LIGHTNING (Opus 4.8) ==================================================
-// Lightning agents are non-streaming and conversation-scoped server-side. We
-// pack SYSTEM_PROMPT + mode flags + snapshot + transcript + current turn into
-// a single message each call (fresh conversationId), then parse the response
-// the same way as FreeModel so the rest of the pipeline doesn't care which
-// upstream answered.
+// Lightning exposes an OpenAI-compatible LLM endpoint at lightning.ai/api/v1
+// authenticated with sk-lit-... API keys. Same wire protocol as FreeModel,
+// so we delegate to runChat with the upstream overridden. reasoning_effort
+// is suppressed because Anthropic models on Lightning don't accept it.
 
-const LIGHTNING_URL =
-  "https://lightning.ai/v1/agents/ast_01ksqss5398znf78kqe6jfsz3d/conversations";
-const LIGHTNING_BILLING_PROJECT_ID = "01kt6g1tfknwhm01rn9vbrch7g";
+const LIGHTNING_BASE_URL = "https://lightning.ai/api/v1";
+const LIGHTNING_MODEL = "anthropic/claude-opus-4-8";
 
-function flattenMessageText(content) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const out = [];
-  for (const part of content) {
-    if (typeof part === "string") { out.push(part); continue; }
-    if (part?.type === "text" && typeof part.text === "string") { out.push(part.text); continue; }
-    if (part?.type === "image_url") { out.push("[image attached]"); continue; }
-  }
-  return out.join("\n");
-}
-
-function extractLightningText(data) {
-  if (!data) return "";
-  const visit = (msg) => {
-    if (!msg) return "";
-    if (typeof msg === "string") return msg;
-    if (typeof msg.text === "string") return msg.text;
-    if (Array.isArray(msg.content)) {
-      const chunks = [];
-      for (const c of msg.content) {
-        if (typeof c === "string") { chunks.push(c); continue; }
-        if (Array.isArray(c?.parts)) {
-          chunks.push(c.parts.filter((p) => typeof p === "string").join(""));
-          continue;
-        }
-        if (typeof c?.text === "string") { chunks.push(c.text); continue; }
-      }
-      if (chunks.length) return chunks.join("");
-    }
-    return "";
-  };
-
-  const tryFields = [data.message, data.response, data.reply, data.output];
-  for (const f of tryFields) {
-    const t = visit(f);
-    if (t) return t;
-  }
-  if (Array.isArray(data.messages) && data.messages.length) {
-    const last = data.messages[data.messages.length - 1];
-    const t = visit(last);
-    if (t) return t;
-  }
-  if (typeof data.content === "string") return data.content;
-  if (typeof data.text === "string") return data.text;
-  return "";
-}
-
-export async function runChatLightning({ history, thinkMode, context, mode, webSearch, onThinking, onStatus, signal }) {
+export async function runChatLightning(opts) {
   const apiKey = (process.env.LIGHTNING_API_KEY || "").trim();
-  const authRaw = (process.env.LIGHTNING_AUTH || "").trim();
-  const gridUser = (process.env.LIGHTNING_USER_ID || "").trim();
-  if (!apiKey && !authRaw) {
-    throw new Error(
-      "Set LIGHTNING_API_KEY (sk-lit-...) or LIGHTNING_AUTH (Bearer eyJ...) on the server",
-    );
+  if (!apiKey) {
+    throw new Error("LIGHTNING_API_KEY is not set on the server");
   }
-
-  const sections = [];
-  sections.push("=== SYSTEM PROMPT ===\n" + SYSTEM_PROMPT);
-  if (webSearch) {
-    sections.push(
-      "=== WEB SEARCH ===\nYou may search the web when up-to-date info is needed.",
-    );
-  }
-  if (mode === "model") {
-    sections.push(
-      "=== MODEL MODE ===\nCreate ONE self-contained Model under Workspace; " +
-      "build all parts as children of it; anchor parts; set a PrimaryPart-worthy base.",
-    );
-  }
-  if (typeof context === "string" && context.trim()) {
-    sections.push("=== ROBLOX PLACE SNAPSHOT ===\n" + context);
-  }
-
-  const turns = Array.isArray(history) ? history.slice() : [];
-  const currentTurn = turns.pop();
-  if (turns.length) {
-    const transcript = turns
-      .map((m) => `--- ${String(m.role || "user").toUpperCase()} ---\n${flattenMessageText(m.content)}`)
-      .join("\n\n");
-    sections.push("=== PRIOR TURNS ===\n" + transcript);
-  }
-  sections.push("=== CURRENT USER TURN ===\n" + flattenMessageText(currentTurn?.content || ""));
-  if (thinkMode && thinkMode !== "medium") {
-    sections.push(`=== THINKING EFFORT ===\n${thinkMode}`);
-  }
-  sections.push(
-    "=== OUTPUT CONTRACT ===\nReturn ONLY the single JSON object specified above " +
-    "(thinking / reply / plan / actions). No markdown fences, no prose around it.",
-  );
-
-  const packed = sections.join("\n\n");
-
-  if (typeof onStatus === "function") {
-    try { onStatus("Calling Opus 4.8…"); } catch {}
-  }
-
-  const headers = { "Content-Type": "application/json" };
-  if (apiKey) {
-    headers["X-Grid-Key"] = apiKey;
-    if (gridUser) headers["X-Grid-User"] = gridUser;
-  }
-  if (authRaw) {
-    // Accept either "Bearer xxx" or raw "eyJxxx" — auto-prefix raw JWTs.
-    const isJwt = /^eyJ[A-Za-z0-9_-]+\./.test(authRaw);
-    headers["Authorization"] = (isJwt && !/^Bearer\s/i.test(authRaw)) ? `Bearer ${authRaw}` : authRaw;
-  }
-
-  const res = await fetch(LIGHTNING_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      conversationId: "",
-      autoName: false,
-      stream: false,
-      billingProjectId: LIGHTNING_BILLING_PROJECT_ID,
-      message: {
-        author: { role: "user" },
-        content: [{ contentType: "text", parts: [packed] }],
-      },
-    }),
-    signal,
+  return runChat({
+    ...opts,
+    apiKey,
+    model: LIGHTNING_MODEL,
+    baseUrl: LIGHTNING_BASE_URL,
+    withReasoning: false,
   });
-
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Lightning ${res.status}: ${detail.slice(0, 500)}`);
-  }
-
-  const data = await res.json().catch(() => ({}));
-  const content = extractLightningText(data);
-
-  let parsed = extractJson(content);
-  let salvaged = false;
-  if (!parsed || typeof parsed !== "object") {
-    parsed = salvageJson(content);
-    salvaged = !!parsed;
-  }
-
-  if (!parsed) {
-    return {
-      thinking: "",
-      reply: content || "(no response)",
-      actions: [],
-      plan: null,
-      raw: content,
-      salvaged: false,
-      truncated: false,
-    };
-  }
-
-  const reply = typeof parsed.reply === "string" ? parsed.reply : "";
-  const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
-  const plan = sanitizePlan(parsed.plan);
-  const thinking = typeof parsed.thinking === "string" ? parsed.thinking : "";
-
-  if (thinking && typeof onThinking === "function") {
-    try { onThinking(thinking); } catch {}
-  }
-
-  return {
-    thinking,
-    reply: reply || (plan
-      ? "I made a plan — pick the optional extras and click Build."
-      : actions.length ? "(done)" : "(no response)"),
-    actions,
-    plan,
-    raw: content,
-    salvaged,
-    truncated: false,
-  };
 }
