@@ -5,7 +5,7 @@ import {
   createLink, getLink, getLinkByCode, getLinkByToken,
   confirmLink, queueActions, drainQueue, setContext,
 } from "./store.js";
-import { runChat, runChatLightning, streamOnce } from "./ai.js";
+import { runChat, runChatLightning, runChatKiro, isKiroModel, streamOnce } from "./ai.js";
 import {
   registerAuthRoutes, requireUser, currentUser, authConfigured,
 } from "./auth.js";
@@ -337,7 +337,9 @@ app.post("/api/chat", async (req, res) => {
   };
 
   try {
-    const chatFn = link.model === "opus-4.8" ? runChatLightning : runChat;
+    const chatFn = isKiroModel(link.model)
+      ? runChatKiro
+      : link.model === "opus-4.8" ? runChatLightning : runChat;
     const { thinking, reply, actions, plan, truncated, salvaged } = await chatFn({
       apiKey: link.apiKey,
       model: link.model,
@@ -487,7 +489,9 @@ app.post("/api/plugin/chat", async (req, res) => {
   link.history.push({ role: "user", content: message });
 
   try {
-    const chatFn = link.model === "opus-4.8" ? runChatLightning : runChat;
+    const chatFn = isKiroModel(link.model)
+      ? runChatKiro
+      : link.model === "opus-4.8" ? runChatLightning : runChat;
     const { thinking, reply, actions } = await chatFn({
       apiKey: link.apiKey, model: link.model, history: link.history,
       context: link.context,
