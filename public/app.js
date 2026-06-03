@@ -40,6 +40,18 @@ async function init() {
   $("shell").hidden = false;
 
   if (!me.user.seenIntro) showIntro();
+
+  // Auto-resume the most recent conversation so memory feels continuous
+  // across page reloads. New chat button still clears this.
+  try {
+    const { conversations } = await get("/api/conversations");
+    if (Array.isArray(conversations) && conversations.length) {
+      const top = conversations[0];
+      if (top && top.count > 0) {
+        await loadConversation(top.id);
+      }
+    }
+  } catch { /* if history fails, just start fresh */ }
 }
 
 function showIntro() { $("introModal").hidden = false; }
@@ -638,7 +650,8 @@ async function loadConversation(id) {
   try {
     const { conversation } = await get(`/api/conversations/${id}`);
     state.convoId = id;
-    $("chat").innerHTML = "";
+    const chat = $("chat");
+    chat.innerHTML = "";
     for (const m of conversation.messages) {
       if (m.role === "user") {
         const text = typeof m.content === "string" ? m.content
@@ -647,6 +660,10 @@ async function loadConversation(id) {
       } else {
         addMsg("ai", typeof m.content === "string" ? m.content : "");
       }
+    }
+    if (!conversation.messages.length) {
+      // empty convo — restore the empty state hint
+      // (do nothing; redraw on next refresh)
     }
     closeDrawers();
   } catch (e) { flash("Couldn't open that chat: " + e.message); }

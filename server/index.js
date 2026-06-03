@@ -102,6 +102,38 @@ function requirePlugin(req, res) {
   return link;
 }
 
+// The browser never needs to see script bodies — the plugin polls actions with
+// its own bearer token and applies them directly. Strip `source` (and a few
+// near-aliases) from anything we send back over the SSE stream, plus any
+// fenced code blocks that show up in the reply/thinking text. This is the
+// privacy boundary: the AI reads sources, the user does not.
+function redactActionsForBrowser(actions) {
+  if (!Array.isArray(actions)) return [];
+  return actions.map((a) => {
+    if (!a || typeof a !== "object") return a;
+    const copy = { ...a };
+    // Keep the metadata the UI uses for the "N actions queued" tag — drop bodies.
+    for (const k of ["source", "script", "code", "lua", "luaSource", "newSource"]) {
+      if (k in copy) delete copy[k];
+    }
+    // Hide the actual asset id from the browser for free-model inserts — it
+    // gets resolved server-side and the user doesn't need to scrape it.
+    if (copy.properties && typeof copy.properties === "object") {
+      copy.properties = { ...copy.properties };
+      for (const k of ["Source", "ScriptSource"]) delete copy.properties[k];
+    }
+    return copy;
+  });
+}
+
+// Redact any fenced code block from a reply/thinking string. The system
+// prompt forbids echoing place scripts, but enforce it on the wire too.
+function redactCodeBlocks(text) {
+  if (typeof text !== "string" || !text) return text;
+  // ```lang\n...``` → "[code omitted — sent to Studio]"
+  return text.replace(/```[a-zA-Z0-9_-]*\n[\s\S]*?```/g, "[code omitted — sent to Studio]");
+}
+
 // Build a chat message from text + attachments. Images become vision parts
 // (OpenAI multimodal format); text files are inlined into the prompt so any
 // model — vision-capable or not — can use their contents.
@@ -238,6 +270,42 @@ app.post("/api/chat", async (req, res) => {
   }
   history.push(userMsg);
 
+  // Streaming-redactor for the live "thinking" feed: drop anything between
+  // triple-backtick fences so a model that misbehaves and starts pasting
+  // place-script source mid-reasoning never reaches the browser.
+  let fenceOpen = false;
+  let pending = ""; // partial-fence buffer at the tail of each chunk
+  const safeStreamThinking = (chunk) => {
+    if (!chunk) return;
+    let buf = pending + chunk;
+    pending = "";
+    let out = "";
+    while (buf.length) {
+      const idx = buf.indexOf("```");
+      if (idx === -1) {
+        // No fence in the remaining buffer. Hold the last 2 chars in case the
+        // fence is being split across chunks (``` could arrive in two parts).
+        if (!fenceOpen) {
+          if (buf.length > 2) { out += buf.slice(0, -2); pending = buf.slice(-2); }
+          else { pending = buf; }
+        }
+        // If a fence is open, drop everything — wait for the close.
+        break;
+      }
+      if (!fenceOpen) {
+        out += buf.slice(0, idx);
+        out += "[code omitted — sent to Studio]";
+        fenceOpen = true;
+        buf = buf.slice(idx + 3);
+      } else {
+        // Inside a fence: skip up to and including the close.
+        fenceOpen = false;
+        buf = buf.slice(idx + 3);
+      }
+    }
+    if (out) send("thinking", { chunk: out });
+  };
+
   try {
     const { thinking, reply, actions, plan, truncated, salvaged } = await runChat({
       apiKey: link.apiKey,
@@ -248,7 +316,7 @@ app.post("/api/chat", async (req, res) => {
       webSearch,
       context: link.context,
       signal: ctrl.signal,
-      onThinking: (chunk) => send("thinking", { chunk }),
+      onThinking: safeStreamThinking,
       onStatus: (s) => send("status", { status: s }),
     });
     // If a plan was returned, treat this as a "plan-only" turn — don't queue
@@ -256,9 +324,11 @@ app.post("/api/chat", async (req, res) => {
     // the user hasn't approved yet.
     const buildActions = plan ? [] : actions.filter((a) => a && a.type);
 
-    // Persist the turn to the user's conversation.
+    // Persist the turn to the user's conversation. Store the user-safe
+    // reply (with code blocks redacted) so reloaded history matches what the
+    // user saw the first time.
     convoId = await appendMessage(user.id, convoId, userMsg);
-    await appendMessage(user.id, convoId, { role: "assistant", content: reply });
+    await appendMessage(user.id, convoId, { role: "assistant", content: redactCodeBlocks(reply) });
 
     // Keep the ephemeral link.history in sync for the in-Studio plugin chat view.
     link.history = (await getConversation(user.id, convoId))?.messages.map((m) => ({ role: m.role, content: m.content })) || [];
@@ -266,8 +336,14 @@ app.post("/api/chat", async (req, res) => {
     const queuedIds = buildActions.length ? queueActions(link, buildActions) : [];
     // Charge one credit for the successful generation.
     const { credits } = await spendCredit(user.id);
+    // Privacy: the plugin runs these actions with its own token. Strip
+    // script bodies (and any fenced code blocks the model snuck into prose)
+    // from the browser-facing payload.
+    const safeActions = redactActionsForBrowser(buildActions);
+    const safeReply = redactCodeBlocks(reply);
+    const safeThinking = redactCodeBlocks(thinking);
     send("done", {
-      thinking, reply, plan, actions: buildActions, queued: queuedIds.length,
+      thinking: safeThinking, reply: safeReply, plan, actions: safeActions, queued: queuedIds.length,
       truncated, salvaged, credits, convoId,
     });
   } catch (err) {
