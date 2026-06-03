@@ -25,7 +25,7 @@ const redisEnabled = !!(REDIS_URL && REDIS_TOKEN);
 // same user via read-modify-write — without clobbering each other's whole blob.
 const REDIS_HASH = "spider:users";
 
-export const STARTING_CREDITS = 20;
+export const STARTING_CREDITS = 1000;
 export { redisEnabled };
 
 let users = new Map(); // discordId -> user record (in-memory cache)
@@ -151,15 +151,17 @@ export async function syncUser(id) {
   return getUser(id);
 }
 
-// Spend one credit. Returns { ok, credits }. ok=false when out of credits.
+// Spend credits for one generation. `amount` defaults to 1 (legacy callers).
+// Returns { ok, credits }. ok=false when the user can't afford the spend.
 // Async read-modify-write so concurrent web/bot updates don't clobber.
-export async function spendCredit(id) {
+export async function spendCredit(id, amount = 1) {
   id = String(id);
   await refresh(id);
   const u = users.get(id);
   if (!u) return { ok: false, credits: 0 };
-  if (u.credits <= 0) return { ok: false, credits: 0 };
-  u.credits -= 1;
+  const cost = Math.max(1, Math.floor(amount));
+  if (u.credits < cost) return { ok: false, credits: u.credits };
+  u.credits -= cost;
   persist(id);
   return { ok: true, credits: u.credits };
 }

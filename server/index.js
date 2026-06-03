@@ -5,7 +5,7 @@ import {
   createLink, getLink, getLinkByCode, getLinkByToken,
   confirmLink, queueActions, drainQueue, setContext,
 } from "./store.js";
-import { runChat, runChatLightning, runChatKiro, isKiroModel, streamOnce } from "./ai.js";
+import { runChat, runChatLightning, runChatKiro, isKiroModel, modelCost, streamOnce } from "./ai.js";
 import {
   registerAuthRoutes, requireUser, currentUser, authConfigured,
 } from "./auth.js";
@@ -256,8 +256,9 @@ app.post("/api/chat", async (req, res) => {
   if (!link) return;
   if (!link.apiKey) return res.status(400).json({ error: "no API key set for this session" });
   if (!link.linked) return res.status(400).json({ error: "Roblox plugin not linked yet" });
-  if (user.credits <= 0) {
-    return res.status(402).json({ error: "out of credits", credits: 0 });
+  const cost = modelCost(link.model);
+  if (user.credits < cost) {
+    return res.status(402).json({ error: `not enough credits — this model costs ${cost}`, credits: user.credits, cost });
   }
 
   const message = (req.body?.message || "").toString();
@@ -367,8 +368,8 @@ app.post("/api/chat", async (req, res) => {
     link.history = (await getConversation(user.id, convoId))?.messages.map((m) => ({ role: m.role, content: m.content })) || [];
 
     const queuedIds = buildActions.length ? queueActions(link, buildActions) : [];
-    // Charge one credit for the successful generation.
-    const { credits } = await spendCredit(user.id);
+    // Charge per-model credits for the successful generation.
+    const { credits } = await spendCredit(user.id, cost);
     // Privacy: the plugin runs these actions with its own token. Strip
     // script bodies (and any fenced code blocks the model snuck into prose)
     // from the browser-facing payload.
@@ -480,8 +481,9 @@ app.post("/api/plugin/chat", async (req, res) => {
 
   // Charge the session owner's credits (same pool as the website).
   const owner = link.ownerId ? getUser(link.ownerId) : null;
-  if (owner && owner.credits <= 0) {
-    return res.status(402).json({ error: "out of credits — top up on the website", credits: 0 });
+  const cost = modelCost(link.model);
+  if (owner && owner.credits < cost) {
+    return res.status(402).json({ error: `not enough credits — this model costs ${cost}. Top up on the website.`, credits: owner.credits, cost });
   }
 
   const message = (req.body?.message || "").toString();
@@ -500,7 +502,7 @@ app.post("/api/plugin/chat", async (req, res) => {
     const buildActions = actions.filter((a) => a && a.type);
     const queued = buildActions.length ? queueActions(link, buildActions) : [];
     let credits;
-    if (owner) credits = (await spendCredit(owner.id)).credits;
+    if (owner) credits = (await spendCredit(owner.id, cost)).credits;
     res.json({ thinking, reply, actions: buildActions, queued: queued.length, credits });
   } catch (err) {
     res.status(502).json({ error: String(err.message || err) });

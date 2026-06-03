@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Spider — AI Builder for Roblox Studio</title>
-  <meta name="description" content="Spider is an AI-powered build tool for Roblox Studio. Plan whole games, fix scripts, and insert assets — all from your browser. Discord login, 20 free generations." />
+  <meta name="description" content="Spider is an AI-powered build tool for Roblox Studio. Plan whole games, fix scripts, and insert assets — all from your browser. Discord login, 1000 free credits to start." />
   <meta name="keywords" content="Roblox, AI, game builder, Roblox Studio, development tool, Spider, FreeModel" />
   <meta name="author" content="Spider" />
   <meta name="robots" content="index, follow" />
@@ -27,7 +27,7 @@
         <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M20.32 4.37A19.8 19.8 0 0 0 15.4 2.9a13.7 13.7 0 0 0-.63 1.28 18.3 18.3 0 0 0-5.5 0A12.6 12.6 0 0 0 8.63 2.9a19.7 19.7 0 0 0-4.92 1.47C.58 9.06-.27 13.64.15 18.15a19.9 19.9 0 0 0 6.04 3.05c.49-.66.92-1.36 1.29-2.1-.71-.27-1.39-.6-2.03-.99.17-.12.34-.25.5-.38a14.2 14.2 0 0 0 12.1 0c.17.14.34.26.5.38-.65.39-1.33.72-2.04.99.37.74.8 1.44 1.3 2.1a19.8 19.8 0 0 0 6.03-3.05c.5-5.25-.85-9.79-3.56-13.78ZM8.02 15.33c-1.18 0-2.15-1.09-2.15-2.42 0-1.34.95-2.43 2.15-2.43 1.2 0 2.17 1.1 2.15 2.43 0 1.33-.95 2.42-2.15 2.42Zm7.96 0c-1.18 0-2.15-1.09-2.15-2.42 0-1.34.95-2.43 2.15-2.43 1.2 0 2.17 1.1 2.15 2.43 0 1.33-.94 2.42-2.15 2.42Z"/></svg>
         Continue with Discord
       </a>
-      <p class="auth-note" id="authNote">20 free generations to start.</p>
+      <p class="auth-note" id="authNote">1000 free credits to start. Most models cost 100 credits per generation — Opus 4.8 costs 500.</p>
     </div>
   </div>
 
@@ -47,7 +47,7 @@
         <li><span class="step-n">3</span>
           <div><b>Describe your build</b><br/>Spider plans it first, then ships it. Whole games work.</div></li>
         <li><span class="step-n">4</span>
-          <div><b>Approve and watch</b><br/>Toggle optional extras, click Build, and watch it land in Studio. 1 credit per generation, 20 to start.</div></li>
+          <div><b>Approve and watch</b><br/>Toggle optional extras, click Build, and watch it land in Studio. You start with 1000 credits — 100 per generation for most models, 500 for Opus 4.8.</div></li>
       </ol>
       <button class="primary" id="introClose">Get started</button>
     </div>
@@ -69,7 +69,7 @@
         <img class="avatar" id="userAvatar" alt="" />
         <div class="account-text">
           <div class="account-name" id="userName">—</div>
-          <div class="credits" id="creditsLine"><b id="creditsNum">20</b> credits</div>
+          <div class="credits" id="creditsLine"><b id="creditsNum">1000</b> credits</div>
         </div>
         <button class="logout" id="logoutBtn" title="Log out">⎋</button>
       </div>
@@ -82,12 +82,11 @@
           <div class="select-wrap">
             <select id="model">
               <option value="gpt-5.5" disabled title="Temporarily unavailable">gpt-5.5 (unavailable)</option>
-              <option value="gpt-5.4" selected>gpt-5.4 (recommended)</option>
-              <option value="opus-4.8" title="Limited availability — routed via Lightning AI">opus-4.8 (limited)</option>
-              <option value="kiro-high" title="claude-opus-4-8 via Kiro (high quota cache)">Kiro Opus 4.8 — high cache</option>
-              <option value="kiro-low" title="claude-opus-4-8 via Kiro (low quota cache)">Kiro Opus 4.8 — low cache</option>
-              <option value="kiro-max-cc" title="claude-opus-4-8 via Kiro (MAX-CC)">Kiro Opus 4.8 — MAX-CC</option>
-              <option value="kiro-special" title="claude-opus-4-8 via Kiro (special price)">Kiro Opus 4.8 — special</option>
+              <option value="gpt-5.4" selected>gpt-5.4 (recommended) — 100 credits</option>
+              <option value="kiro-high" title="claude-opus-4-8 via Kiro (high quota cache)">Opus 4.8 — high cache — 500 credits</option>
+              <option value="kiro-low" title="claude-opus-4-8 via Kiro (low quota cache)">Opus 4.8 — low cache — 500 credits</option>
+              <option value="kiro-max-cc" title="claude-opus-4-8 via Kiro (MAX-CC)">Opus 4.8 — MAX-CC — 500 credits</option>
+              <option value="kiro-special" title="claude-opus-4-8 via Kiro (special price)">Opus 4.8 — special — 500 credits</option>
             </select>
             <span class="select-caret">▾</span>
           </div>
@@ -126,7 +125,7 @@
           <button class="head-btn" id="newChatBtn" title="Start a new chat">＋ New</button>
           <button class="head-btn" id="historyBtn" title="Chat history">History</button>
           <div class="credits-badge" id="creditsBadge" title="Generations remaining">
-            <span class="cb-ico">⚡</span><b id="creditsBadgeNum">20</b>
+            <span class="cb-ico">⚡</span><b id="creditsBadgeNum">1000</b>
           </div>
         </div>
       </header>

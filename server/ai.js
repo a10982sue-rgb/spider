@@ -783,6 +783,21 @@ function sanitizePlan(p) {
   return { title, summary, steps, ideas };
 }
 
+// Credit cost per successful generation, keyed by the model id the UI sends.
+// Unknown ids fall through to the default (100).
+const MODEL_COSTS = {
+  "gpt-5.4": 100,
+  "gpt-5.5": 100,
+  "opus-4.8": 500,
+  "kiro-high": 500,
+  "kiro-low": 500,
+  "kiro-max-cc": 500,
+  "kiro-special": 500,
+};
+export function modelCost(id) {
+  return MODEL_COSTS[id] ?? 100;
+}
+
 // === KIRO (xn--vduyey89e.com) ==============================================
 // OpenAI-compatible endpoint that exposes claude-opus-4-8 under four routing
 // tags. Same wire protocol as FreeModel/Lightning, so we delegate to runChat
