@@ -318,6 +318,10 @@ select {
 }
 .select-wrap:hover .select-caret { color: var(--text-2); }
 
+/* Disabled / unavailable options in native selects */
+select option:disabled { color: var(--text-4); }
+select option { background: var(--bg-elevated); color: var(--text-1); }
+
 /* Primary button */
 button.primary {
   position: relative;
