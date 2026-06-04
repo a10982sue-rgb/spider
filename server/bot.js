@@ -423,9 +423,17 @@ export async function startBot() {
       await client.login(TOKEN);
     } catch (loginErr) {
       const msg = loginErr.message || String(loginErr);
-      if (msg.includes("Used privileged") || msg.includes("GUILD_MEMBERS") || loginErr.code === "PrivilegedIntentError") {
-        console.warn("[bot] GuildMembers intent not enabled — role sync from Discord will be unavailable.");
-        console.warn("[bot]     Enable it at https://discord.com/developers/applications → Bot → Privileged Gateway Intents.");
+      const code = loginErr.code;
+      // DisallowedIntentsError: the intent IS enabled in the portal, but the
+      // bot is either unverified or in 100+ servers (Discord blocks it).
+      // PrivilegedIntentError: the intent toggle is off.
+      // Both mean: can't use GuildMembers — reconnect without it.
+      if (msg.includes("Used privileged") || msg.includes("GUILD_MEMBERS") || msg.includes("disallowed intent") ||
+          code === "PrivilegedIntentError" || code === "DisallowedIntentsError") {
+        console.warn("[bot] GuildMembers intent unavailable — role sync from Discord disabled.");
+        console.warn("[bot]     Possible causes: toggle is off in Developer Portal, or bot is unverified / in 100+ servers.");
+        console.warn("[bot]     Enable: https://discord.com/developers/applications → Bot → Privileged Gateway Intents");
+        console.warn("[bot]     The rest of the bot (slash commands, DMs, changelog) still works.");
         hasGuildMembers = false;
         await client.destroy();
         client = buildClient();
