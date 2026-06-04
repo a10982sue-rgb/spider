@@ -3,6 +3,8 @@
 // Handles large builds (auto-continuation across length limits), truncated-JSON
 // salvage, and image/file attachments (vision).
 
+import { resolveKey, getModel as getCustomModel } from "./settings.js";
+
 const BASE_URL = process.env.FREEMODEL_BASE_URL || "https://api.freemodel.dev";
 const MAX_TOKENS = Number(process.env.FREEMODEL_MAX_TOKENS || 16000);
 const MAX_CONTINUATIONS = Number(process.env.FREEMODEL_MAX_CONTINUATIONS || 6);
@@ -484,6 +486,22 @@ Action types (one "type" field each):
    - Creates an Animation instance with AnimationId set to the asset.
    - If you only have a description: { "type": "insert_free_animation", "query": "dance animation", "parent": "Workspace.Character.Humanoid" }
 
+9. find_code
+   { "type": "find_code", "name": "CombatScript", "className": "Script" }
+   - Search the entire place for a script whose name or path contains the given
+     string. The plugin returns the top hit's full source to the AI context on
+     the next turn. Use this when the user says "fix the CombatScript in my
+     tycoon" but the snapshot is too large for you to see every script body.
+     className is optional (Script | LocalScript | ModuleScript).
+   - This lets you lazily READ one specific script without needing it in the
+     snapshot — and then edit_script it on the following turn.
+
+10. read_script
+   { "type": "read_script", "path": "ServerScriptService.CombatController", "targetCode": "a3f9k2" }
+   - Explicitly re-read a script at a known path. Same mechanism as find_code
+     but when you already know exactly which script (e.g. from the Code-Index).
+     The source arrives in the AI context on the NEXT turn as a script read note.
+
 Every action above that has a "path" or "parent" field MAY also include an
 optional "targetCode" field with the 6-character code of a target instance
 from the Code-Index. When present, the plugin resolves it to the correct path.
@@ -597,6 +615,34 @@ MEMORY — You receive the full chat history of this conversation each turn
 (prior user and assistant turns). USE IT. Refer to what was said earlier,
 honour earlier decisions, remember names the user gave you, and pick up where
 you left off without asking the user to repeat themselves.
+
+- Omit pluginToken from your thinking — the user doesn't need to see it.
+- Every plan's "steps" should start with a undo-safe step: emit one set_property
+  or a no-op create_instance so the ChangeHistoryService recording captures the
+  starting state. Then do the real work.
+- When the user's request is a single surgical edit ("change the sky color",
+  "fix line 14 of this script", "add a property to Part X"), reply in FOUR
+  words or fewer after the edit. No explanation, no recap — brevity.
+
+DEEP CODE SEARCH (find_code / read_script):
+
+The snapshot has a size cap. For VERY LARGE places the model will not see every
+script's full source. When the user names a specific script that the snapshot
+DID NOT inline ("the CombatController in the EventService folder", "the kill
+feed script I attached"), emit a find_code action to search for it. The plugin
+will inject its full source into the context on the NEXT turn so you can read
+and then edit it. Do NOT guess at its contents — search first, then edit.
+
+Similarly, if you suspect a script's contents have changed since the snapshot
+was captured (or if the place is too large for any source to be inlined), emit
+read_script on the known path. The source lands next turn.
+
+UNDO POINTS:
+
+When building more than ~3 things at once, emit a marker action first:
+{ "type": "set_property", "path": "Workspace", "properties": {} }
+This creates an undo waypoint in Studio so the user can revert the whole batch
+in one click without losing earlier work.
 
 - Output ONLY the JSON object. No markdown fences, comments, or trailing commas.`;
 
@@ -731,7 +777,14 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    const tag = baseUrl ? "Upstream" : "FreeModel";
+    let tag = "FreeModel";
+    if (baseUrl) {
+      if (baseUrl.includes("xn--vduyey89e") || baseUrl.includes("kiro")) tag = "Kiro";
+      else if (baseUrl.includes("lightning.ai")) tag = "Lightning";
+      else tag = "Upstream";
+    }
+    // 402 with a "freemodel" body coming from kiro/lightning would be misleading;
+    // prefix the response tag so the UI shows the real upstream that ran out.
     throw new Error(`${tag} ${res.status}: ${detail.slice(0, 500)}`);
   }
 
@@ -904,10 +957,12 @@ function sanitizePlan(p) {
 }
 
 // Credit cost per successful generation, keyed by the model id the UI sends.
-// Unknown ids fall through to the default (100).
+// Unknown ids fall through to the default (100). Custom admin-registered
+// models declare their own cost in settings.json and win over this table.
 const MODEL_COSTS = {
   "gpt-5.4": 100,
-  "gpt-5.5": 100,
+  "gpt-5.5": 150,
+  "gpt-5.6": 200,
   "opus-4.8": 500,
   "kiro-high": 500,
   "kiro-low": 500,
@@ -915,7 +970,33 @@ const MODEL_COSTS = {
   "kiro-special": 500,
 };
 export function modelCost(id) {
+  const custom = getCustomModel(id);
+  if (custom && custom.cost) return custom.cost;
   return MODEL_COSTS[id] ?? 100;
+}
+
+// Models gated behind the tester role. Regular users can't pick these.
+const GATED_MODELS = new Set(["gpt-5.5", "gpt-5.6"]);
+export function isModelGated(id) {
+  const custom = getCustomModel(id);
+  if (custom) return !!custom.gated;
+  return GATED_MODELS.has(id);
+}
+
+// Catalog of UI-visible base models. Custom entries from settings merge on top.
+export function listAvailableModels(roles = {}) {
+  const tester = !!roles.tester;
+  const base = [
+    { id: "gpt-5.4", label: "gpt-5.4 (recommended) — 100 credits", family: "openai", cost: 100, gated: false },
+    { id: "gpt-5.5", label: "gpt-5.5 (tester) — 150 credits", family: "openai", cost: 150, gated: true },
+    { id: "gpt-5.6", label: "gpt-5.6 (tester) — 200 credits", family: "openai", cost: 200, gated: true },
+    { id: "opus-4.8", label: "Opus 4.8 — 500 credits", family: "anthropic", cost: 500, gated: false },
+    { id: "kiro-high", label: "Opus 4.8 — high cache — 500", family: "anthropic", cost: 500, gated: false },
+    { id: "kiro-low", label: "Opus 4.8 — low cache — 500", family: "anthropic", cost: 500, gated: false },
+    { id: "kiro-max-cc", label: "Opus 4.8 — MAX-CC — 500", family: "anthropic", cost: 500, gated: false },
+    { id: "kiro-special", label: "Opus 4.8 — special — 500", family: "anthropic", cost: 500, gated: false },
+  ];
+  return base.filter((m) => tester || !m.gated);
 }
 
 // === KIRO (xn--vduyey89e.com) ==============================================
@@ -939,7 +1020,7 @@ export function isKiroModel(id) {
 }
 
 export async function runChatKiro(opts) {
-  const apiKey = (process.env.KIRO_API_KEY || KIRO_DEFAULT_KEY).trim();
+  const apiKey = resolveKey("KIRO_API_KEY", KIRO_DEFAULT_KEY);
   const upstreamModel = KIRO_MODELS[opts.model] || KIRO_MODELS["kiro-high"];
   // Kiro's path is `/v1/chat/completions`; runChat appends `/chat/completions`
   // to the supplied baseUrl, so pass the `/v1` prefix here.
@@ -964,7 +1045,7 @@ const LIGHTNING_BASE_URL = "https://lightning.ai/api/v1";
 const LIGHTNING_DEFAULT_MODEL = "anthropic/claude-opus-4-8";
 
 export async function runChatLightning(opts) {
-  const apiKey = (process.env.LIGHTNING_API_KEY || "").trim();
+  const apiKey = resolveKey("LIGHTNING_API_KEY", "");
   if (!apiKey) {
     throw new Error("LIGHTNING_API_KEY is not set on the server");
   }
@@ -985,4 +1066,25 @@ export async function runChatLightning(opts) {
     onStatus(msg);
   }
   return result;
+}
+
+// === CUSTOM (admin-registered) =============================================
+// Any model added via the admin panel routes here. Each entry declares its own
+// upstream model id, base URL, and the env-var name holding the key.
+export function isCustomModel(id) {
+  return !!getCustomModel(id);
+}
+
+export async function runChatCustom(opts) {
+  const def = getCustomModel(opts.model);
+  if (!def) throw new Error(`Unknown custom model: ${opts.model}`);
+  const apiKey = resolveKey(def.keyName || "DEFAULT_API_KEY", "");
+  if (!apiKey) throw new Error(`API key '${def.keyName}' not set for model ${opts.model}`);
+  return runChat({
+    ...opts,
+    apiKey,
+    model: def.upstream,
+    baseUrl: def.baseUrl,
+    withReasoning: def.withReasoning !== false,
+  });
 }

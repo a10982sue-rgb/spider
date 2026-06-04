@@ -3,18 +3,31 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createLink, getLink, getLinkByCode, getLinkByToken,
-  confirmLink, queueActions, drainQueue, setContext,
+  confirmLink, queueActions, drainQueue, setContext, appendContextNote,
 } from "./store.js";
-import { runChat, runChatLightning, runChatKiro, isKiroModel, modelCost, streamOnce } from "./ai.js";
+import {
+  runChat, runChatLightning, runChatKiro, runChatCustom,
+  isKiroModel, isCustomModel, isModelGated, modelCost, streamOnce,
+  listAvailableModels,
+} from "./ai.js";
 import {
   registerAuthRoutes, requireUser, currentUser, authConfigured,
 } from "./auth.js";
-import { spendCredit, markIntroSeen, publicUser, getUser, syncUser, ready as usersReady } from "./users.js";
+import {
+  spendCredit, markIntroSeen, publicUser, getUser, syncUser,
+  ready as usersReady, effectiveRoles, setManualRole, allUsers, reloadAll,
+  markChangelogSeen,
+} from "./users.js";
 import {
   ready as convosReady,
   listConversations, getConversation, createConversation, deleteConversation,
   appendMessage,
 } from "./convos.js";
+import {
+  ready as settingsReady, resolveKey, setApiKey, listApiKeyNames,
+  listModels as listCustomModels, addModel, removeModel,
+  listChangelog, addChangelog, removeChangelog,
+} from "./settings.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -203,10 +216,22 @@ app.post("/api/session/start", requireUser, (req, res) => {
 app.post("/api/session/config", (req, res) => {
   const link = requireWebSession(req, res);
   if (!link) return;
+  const user = currentUser(req);
   const { model } = req.body || {};
-  // Default API key for all users
-  link.apiKey = process.env.DEFAULT_API_KEY || "fe_oa_48604b790ac5e4f74ac0877a184737d54192da7c78427c0a";
-  if (typeof model === "string" && model.trim()) link.model = model.trim();
+  // Default API key for all users — resolved at request time so admins can
+  // rotate it from the admin panel without a redeploy.
+  link.apiKey = resolveKey("DEFAULT_API_KEY", "fe_oa_48604b790ac5e4f74ac0877a184737d54192da7c78427c0a");
+  if (typeof model === "string" && model.trim()) {
+    const requested = model.trim();
+    // Block gated models unless the user has the tester role.
+    if (isModelGated(requested)) {
+      const roles = user ? effectiveRoles(user) : { tester: false, admin: false };
+      if (!roles.tester) {
+        return res.status(403).json({ error: `Model '${requested}' is restricted to testers.` });
+      }
+    }
+    link.model = requested;
+  }
   res.json({ ok: true, model: link.model, hasKey: !!link.apiKey });
 });
 
@@ -245,6 +270,22 @@ app.post("/api/link/confirm", (req, res) => {
   });
 });
 
+// Plugin pings this on boot with its stored token to make sure the server
+// still recognizes it. Fixes the "shows Linked even when it's not" bug — a
+// 401 here makes the plugin clear its stored token and go to the unlinked
+// state instead of pretending it's connected.
+app.post("/api/link/verify", (req, res) => {
+  const link = getLinkByToken(bearer(req));
+  if (!link) return res.status(401).json({ error: "invalid plugin token" });
+  res.json({
+    ok: true,
+    linkId: link.linkId,
+    user: link.roblox,
+    model: link.model,
+    hasKey: !!link.apiKey,
+  });
+});
+
 // === CHAT ==================================================================
 
 // Browser sends a chat message. Streamed via SSE so the UI can show the
@@ -256,8 +297,14 @@ app.post("/api/chat", async (req, res) => {
   if (!link) return;
   if (!link.apiKey) return res.status(400).json({ error: "no API key set for this session" });
   if (!link.linked) return res.status(400).json({ error: "Roblox plugin not linked yet" });
+  const roles = effectiveRoles(user);
+  // Re-check gating in case the user swapped models mid-session.
+  if (isModelGated(link.model) && !roles.tester) {
+    return res.status(403).json({ error: `Model '${link.model}' is restricted to testers.` });
+  }
   const cost = modelCost(link.model);
-  if (user.credits < cost) {
+  // Testers don't pay credits.
+  if (!roles.tester && user.credits < cost) {
     return res.status(402).json({ error: `not enough credits — this model costs ${cost}`, credits: user.credits, cost });
   }
 
@@ -338,9 +385,11 @@ app.post("/api/chat", async (req, res) => {
   };
 
   try {
-    const chatFn = isKiroModel(link.model)
-      ? runChatKiro
-      : link.model === "opus-4.8" ? runChatLightning : runChat;
+    const chatFn = isCustomModel(link.model)
+      ? runChatCustom
+      : isKiroModel(link.model)
+        ? runChatKiro
+        : link.model === "opus-4.8" ? runChatLightning : runChat;
     const { thinking, reply, actions, plan, truncated, salvaged } = await chatFn({
       apiKey: link.apiKey,
       model: link.model,
@@ -356,7 +405,12 @@ app.post("/api/chat", async (req, res) => {
     // If a plan was returned, treat this as a "plan-only" turn — don't queue
     // any build actions even if the model accidentally emitted some, because
     // the user hasn't approved yet.
+    // Prepend an undo-point action before every build batch so the user
+    // can revert the entire AI turn in one Studio undo step.
     const buildActions = plan ? [] : actions.filter((a) => a && a.type);
+    if (buildActions.length > 1) {
+      buildActions.unshift({ type: "set_property", path: "Workspace", properties: {} });
+    }
 
     // Persist the turn to the user's conversation. Store the user-safe
     // reply (with code blocks redacted) so reloaded history matches what the
@@ -368,8 +422,13 @@ app.post("/api/chat", async (req, res) => {
     link.history = (await getConversation(user.id, convoId))?.messages.map((m) => ({ role: m.role, content: m.content })) || [];
 
     const queuedIds = buildActions.length ? queueActions(link, buildActions) : [];
-    // Charge per-model credits for the successful generation.
-    const { credits } = await spendCredit(user.id, cost);
+    // Charge per-model credits for the successful generation — unless the user
+    // is a tester (unlimited).
+    let credits = user.credits;
+    if (!roles.tester) {
+      const r = await spendCredit(user.id, cost);
+      credits = r.credits;
+    }
     // Privacy: the plugin runs these actions with its own token. Strip
     // script bodies (and any fenced code blocks the model snuck into prose)
     // from the browser-facing payload.
@@ -465,12 +524,122 @@ app.post("/api/actions/result", (req, res) => {
 
 // Plugin uploads a snapshot of the place so the AI can SEE existing instances
 // and script sources. Sent before chats and on a periodic refresh.
+// When append=true, the context text is APPENDED as a transient note instead of
+// replacing the snapshot. Used by find_code/read_script to inject searched
+// script bodies into the next chat turn.
 app.post("/api/context", (req, res) => {
   const link = requirePlugin(req, res);
   if (!link) return;
   const context = (req.body?.context ?? "").toString();
-  const size = setContext(link, context);
+  const append = req.body?.append === true;
+  const size = append
+    ? appendContextNote(link, context)
+    : setContext(link, context);
   res.json({ ok: true, size });
+});
+
+// === MODEL CATALOG / CHANGELOG / ADMIN =====================================
+
+// What models can THIS user pick? Adds gated models if they're a tester and
+// merges in custom admin-registered models (with `hidden` filtered).
+app.get("/api/models", async (req, res) => {
+  const user = currentUser(req);
+  const roles = user ? effectiveRoles(user) : { tester: false, admin: false };
+  const builtins = listAvailableModels(roles);
+  const customs = listCustomModels()
+    .filter((m) => !m.hidden && (!m.gated || roles.tester))
+    .map((m) => ({ id: m.id, label: m.label, family: m.family, cost: m.cost, gated: !!m.gated }));
+  res.json({ models: [...builtins, ...customs] });
+});
+
+// Public-readable changelog for the UI's "What's new" panel.
+app.get("/api/changelog", (req, res) => {
+  const scope = (req.query.scope || "").toString();
+  const all = listChangelog();
+  const filtered = scope ? all.filter((e) => e.scope === scope || e.scope === "both") : all;
+  res.json({ entries: filtered });
+});
+
+// User acknowledges they've read up to `at`.
+app.post("/api/changelog/seen", requireUser, async (req, res) => {
+  await markChangelogSeen(req.user.id, Number(req.body?.at) || Date.now());
+  res.json({ ok: true });
+});
+
+function requireAdmin(req, res, next) {
+  const u = currentUser(req);
+  if (!u) return res.status(401).json({ error: "not logged in" });
+  const r = effectiveRoles(u);
+  if (!r.admin) return res.status(403).json({ error: "admin only" });
+  req.user = u;
+  next();
+}
+
+// Admin: list / set / delete API keys (rotated at runtime, no redeploy).
+app.get("/api/admin/keys", requireAdmin, (req, res) => {
+  // Return only the names — never the values.
+  const env = ["DEFAULT_API_KEY", "KIRO_API_KEY", "LIGHTNING_API_KEY"];
+  const overridden = listApiKeyNames();
+  const merged = Array.from(new Set([...env, ...overridden]));
+  res.json({ keys: merged.map((name) => ({ name, overridden: overridden.includes(name) })) });
+});
+
+app.post("/api/admin/keys", requireAdmin, (req, res) => {
+  const { name, value } = req.body || {};
+  if (!name || typeof name !== "string") return res.status(400).json({ error: "name required" });
+  setApiKey(name, typeof value === "string" ? value : "");
+  res.json({ ok: true });
+});
+
+// Admin: custom model registry.
+app.get("/api/admin/models", requireAdmin, (req, res) => {
+  res.json({ models: listCustomModels() });
+});
+app.post("/api/admin/models", requireAdmin, (req, res) => {
+  try {
+    const created = addModel(req.body || {});
+    res.json({ ok: true, model: created });
+  } catch (e) {
+    res.status(400).json({ error: String(e.message || e) });
+  }
+});
+app.delete("/api/admin/models/:id", requireAdmin, (req, res) => {
+  removeModel(req.params.id);
+  res.json({ ok: true });
+});
+
+// Admin: changelog entries (POST broadcasts to the Discord channel as well).
+app.post("/api/admin/changelog", requireAdmin, async (req, res) => {
+  const { title, body, scope } = req.body || {};
+  const entry = addChangelog({ title, body, scope, author: req.user.globalName || req.user.username });
+  // Fire-and-forget — push to Discord if the bot is loaded.
+  try {
+    const mod = await import("./bot.js");
+    if (mod.postChangelog) mod.postChangelog(entry).catch(() => {});
+  } catch {}
+  res.json({ ok: true, entry });
+});
+
+app.delete("/api/admin/changelog/:id", requireAdmin, (req, res) => {
+  removeChangelog(req.params.id);
+  res.json({ ok: true });
+});
+
+// Admin: roster + manual role overrides.
+app.get("/api/admin/users", requireAdmin, async (req, res) => {
+  await reloadAll();
+  const list = allUsers().map((u) => ({
+    id: u.id, username: u.username, globalName: u.globalName,
+    credits: u.credits, roles: effectiveRoles(u),
+    discordRoles: u.roles || {}, manualRoles: u.manualRoles || {},
+  }));
+  res.json({ users: list });
+});
+app.post("/api/admin/users/:id/role", requireAdmin, async (req, res) => {
+  const { role, on } = req.body || {};
+  const out = await setManualRole(req.params.id, role, !!on);
+  if (!out) return res.status(404).json({ error: "user not found or invalid role" });
+  res.json({ ok: true, roles: out });
 });
 
 // Plugin can also send a chat message directly (in-Studio chat box).
@@ -481,8 +650,9 @@ app.post("/api/plugin/chat", async (req, res) => {
 
   // Charge the session owner's credits (same pool as the website).
   const owner = link.ownerId ? getUser(link.ownerId) : null;
+  const ownerRoles = owner ? effectiveRoles(owner) : { tester: false, admin: false };
   const cost = modelCost(link.model);
-  if (owner && owner.credits < cost) {
+  if (owner && !ownerRoles.tester && owner.credits < cost) {
     return res.status(402).json({ error: `not enough credits — this model costs ${cost}. Top up on the website.`, credits: owner.credits, cost });
   }
 
@@ -491,9 +661,11 @@ app.post("/api/plugin/chat", async (req, res) => {
   link.history.push({ role: "user", content: message });
 
   try {
-    const chatFn = isKiroModel(link.model)
-      ? runChatKiro
-      : link.model === "opus-4.8" ? runChatLightning : runChat;
+    const chatFn = isCustomModel(link.model)
+      ? runChatCustom
+      : isKiroModel(link.model)
+        ? runChatKiro
+        : link.model === "opus-4.8" ? runChatLightning : runChat;
     const { thinking, reply, actions } = await chatFn({
       apiKey: link.apiKey, model: link.model, history: link.history,
       context: link.context,
@@ -502,7 +674,8 @@ app.post("/api/plugin/chat", async (req, res) => {
     const buildActions = actions.filter((a) => a && a.type);
     const queued = buildActions.length ? queueActions(link, buildActions) : [];
     let credits;
-    if (owner) credits = (await spendCredit(owner.id, cost)).credits;
+    if (owner && !ownerRoles.tester) credits = (await spendCredit(owner.id, cost)).credits;
+    else if (owner) credits = owner.credits;
     res.json({ thinking, reply, actions: buildActions, queued: queued.length, credits });
   } catch (err) {
     res.status(502).json({ error: String(err.message || err) });
@@ -515,7 +688,7 @@ app.use(express.static(path.join(__dirname, "..", "public"), { dotfiles: "allow"
 
 const PORT = process.env.PORT || 3000;
 // Wait for the persistent stores (Redis or file) to load before serving.
-Promise.all([usersReady, convosReady]).then(() => {
+Promise.all([usersReady, convosReady, settingsReady]).then(() => {
   app.listen(PORT, () => {
     console.log(`FreeModel-Roblox bridge running on http://localhost:${PORT}`);
   });

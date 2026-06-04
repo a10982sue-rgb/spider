@@ -60,7 +60,7 @@
         <div class="logo"><img src="spider.png" alt="Spider" /></div>
         <div class="brand-text">
           <h1>Spider</h1>
-          <p class="tag">AI Roblox builder</p>
+          <p class="tag">AI Roblox builder <span class="beta-tag" title="beta — things may change fast">BETA</span></p>
         </div>
       </div>
 
@@ -81,12 +81,7 @@
         <label class="field">Model
           <div class="select-wrap">
             <select id="model">
-              <option value="gpt-5.5" disabled title="Temporarily unavailable">gpt-5.5 (unavailable)</option>
-              <option value="gpt-5.4" selected>gpt-5.4 (recommended) — 100 credits</option>
-              <option value="kiro-high" title="claude-opus-4-8 via Kiro (high quota cache)">Opus 4.8 — high cache — 500 credits</option>
-              <option value="kiro-low" title="claude-opus-4-8 via Kiro (low quota cache)">Opus 4.8 — low cache — 500 credits</option>
-              <option value="kiro-max-cc" title="claude-opus-4-8 via Kiro (MAX-CC)">Opus 4.8 — MAX-CC — 500 credits</option>
-              <option value="kiro-special" title="claude-opus-4-8 via Kiro (special price)">Opus 4.8 — special — 500 credits</option>
+              <!-- populated dynamically from /api/models -->
             </select>
             <span class="select-caret">▾</span>
           </div>
@@ -122,6 +117,7 @@
           <div class="who" id="whoLinked">Link Studio to start.</div>
         </div>
         <div class="head-actions">
+          <button class="head-btn" id="changelogBtn" title="What's new">Changelog</button>
           <button class="head-btn" id="newChatBtn" title="Start a new chat">＋ New</button>
           <button class="head-btn" id="historyBtn" title="Chat history">History</button>
           <div class="credits-badge" id="creditsBadge" title="Generations remaining">
@@ -199,6 +195,20 @@
     </div>
 
     <div class="drawer-scrim" id="drawerScrim" hidden></div>
+
+    <!-- CHANGELOG DRAWER -->
+    <div class="drawer" id="changelogDrawer" hidden>
+      <div class="drawer-head">
+        <h3>What's new</h3>
+        <button class="drawer-x" data-close="changelogDrawer">✕</button>
+      </div>
+      <p class="drawer-hint">Changelog entries. We're in <b>beta</b> — things move fast.</p>
+      <div class="changelog-badge-row">
+        <span class="beta-tag large" title="You're in beta. Send feedback!">BETA</span>
+        <span class="changelog-scope">v1.0.0-beta</span>
+      </div>
+      <div class="drawer-list" id="changelogList"></div>
+    </div>
 
     <!-- OPTIMIZE DRAWER -->
     <div class="drawer" id="optimizeDrawer" hidden>

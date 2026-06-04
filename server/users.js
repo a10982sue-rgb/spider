@@ -129,6 +129,9 @@ export async function upsertUser({ id, username, globalName, avatar }) {
       credits: STARTING_CREDITS,
       seenIntro: false,
       createdAt: Date.now(),
+      roles: { tester: false, admin: false }, // from Discord + manual override
+      manualRoles: { tester: false, admin: false }, // sticky overrides set by an admin
+      lastChangelogSeenAt: 0,
     };
     users.set(id, u);
   } else {
@@ -136,9 +139,55 @@ export async function upsertUser({ id, username, globalName, avatar }) {
     u.username = username || u.username;
     u.globalName = globalName || u.globalName;
     u.avatar = avatar ?? u.avatar;
+    if (!u.roles) u.roles = { tester: false, admin: false };
+    if (!u.manualRoles) u.manualRoles = { tester: false, admin: false };
+    if (u.lastChangelogSeenAt == null) u.lastChangelogSeenAt = 0;
   }
   persist(id);
   return u;
+}
+
+// Update the roles a user gets from Discord (called after OAuth callback when
+// the bot resolves their guild roles). Manual roles always OR with these.
+export async function setDiscordRoles(id, { tester, admin }) {
+  id = String(id);
+  await refresh(id);
+  const u = users.get(id);
+  if (!u) return null;
+  u.roles = u.roles || {};
+  u.roles.tester = !!tester;
+  u.roles.admin = !!admin;
+  persist(id);
+  return effectiveRoles(u);
+}
+
+// Admin-panel override: stick a role to a user regardless of Discord.
+export async function setManualRole(id, role, on) {
+  id = String(id);
+  await refresh(id);
+  const u = users.get(id);
+  if (!u) return null;
+  u.manualRoles = u.manualRoles || {};
+  if (role !== "tester" && role !== "admin") return null;
+  u.manualRoles[role] = !!on;
+  persist(id);
+  return effectiveRoles(u);
+}
+
+export function effectiveRoles(u) {
+  if (!u) return { tester: false, admin: false };
+  const r = u.roles || {};
+  const m = u.manualRoles || {};
+  return { tester: !!(r.tester || m.tester), admin: !!(r.admin || m.admin) };
+}
+
+export async function markChangelogSeen(id, at) {
+  id = String(id);
+  await refresh(id);
+  const u = users.get(id);
+  if (!u) return;
+  u.lastChangelogSeenAt = Math.max(u.lastChangelogSeenAt || 0, Number(at) || Date.now());
+  persist(id);
 }
 
 // Synchronous cache read — used on hot paths (status polling, middleware).
@@ -235,5 +284,7 @@ export function publicUser(u) {
     avatar: u.avatar,
     credits: u.credits,
     seenIntro: u.seenIntro,
+    roles: effectiveRoles(u),
+    lastChangelogSeenAt: u.lastChangelogSeenAt || 0,
   };
 }

@@ -89,3 +89,17 @@ export function setContext(link, context) {
   link.contextAt = Date.now();
   return link.context.length;
 }
+
+// Append a transient note to the current context — used by find_code and
+// read_script actions so the AI sees the retrieved script body next turn.
+const MAX_CONTEXT_NOTE = 80_000;
+export function appendContextNote(link, note) {
+  const text = typeof note === "string" ? note : "";
+  if (!text) return;
+  const existing = link.context ? link.context + "\n\n" + text : text;
+  link.context = existing.length > MAX_CONTEXT
+    ? existing.slice(existing.length - MAX_CONTEXT) + "\n\n[context truncated — oldest notes dropped]"
+    : existing;
+  link.contextAt = Date.now();
+  return link.context.length;
+}

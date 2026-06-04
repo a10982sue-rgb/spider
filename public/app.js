@@ -1,6 +1,6 @@
 const API = ""; // same origin as the server
 const $ = (id) => document.getElementById(id);
-const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", webSearch: false, convoId: null, sending: false, abortCtrl: null, userStopped: false, abortShown: false };
+const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", webSearch: false, convoId: null, sending: false, abortCtrl: null, userStopped: false, abortShown: false, undoPoint: 0 };
 
 // ---- auth gate ------------------------------------------------------------
 // On load: ask who we are. Show the login screen until authenticated, then
@@ -39,6 +39,12 @@ async function init() {
   $("authGate").hidden = true;
   $("shell").hidden = false;
 
+  // Show active role badges under the account name.
+  renderRoleBadges(me.user.roles);
+
+  // Populate the model dropdown from the server (honors gating).
+  await loadModelList();
+
   if (!me.user.seenIntro) showIntro();
 
   // Auto-resume the most recent conversation so memory feels continuous
@@ -52,9 +58,82 @@ async function init() {
       }
     }
   } catch { /* if history fails, just start fresh */ }
+
+  // Poll for new changelog entries since the user last checked.
+  checkChangelogDot();
 }
 
 function showIntro() { $("introModal").hidden = false; }
+function renderRoleBadges(roles) {
+  const el = $("roleBadges"); if (!el) return;
+  el.innerHTML = "";
+  if (roles) {
+    if (roles.admin) { const b = document.createElement("span"); b.className = "role-badge admin"; b.textContent = "ADMIN"; el.appendChild(b); }
+    if (roles.tester) { const b = document.createElement("span"); b.className = "role-badge tester"; b.textContent = "TESTER"; el.appendChild(b); }
+  }
+}
+async function loadModelList() {
+  try {
+    const { models } = await get("/api/models");
+    const sel = $("model");
+    sel.innerHTML = "";
+    for (const m of models || []) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = `${m.label}${m.gated ? " (tester)" : ""}`;
+      if (m.gated) opt.disabled = true;
+      sel.appendChild(opt);
+    }
+  } catch { /* silently keep the existing options */ }
+}
+async function checkChangelogDot() {
+  try {
+    const { entries } = await get("/api/changelog");
+    if (entries.length) {
+      const latest = entries[0].at;
+      if (latest > (state.user?.lastChangelogSeenAt || 0)) {
+        $("changelogBtn").classList.add("dot");
+      }
+    }
+  } catch {}
+}
+
+// ---- account info block — add role badges row -------------------------------
+function addRoleRow() {
+  const account = $("account");
+  const row = document.createElement("div");
+  row.id = "roleBadges";
+  row.style.cssText = "display:flex;gap:4px;margin-top:2px;";
+  account.querySelector(".account-text")?.appendChild(row);
+}
+addRoleRow();
+
+// ---- changelog drawer -------------------------------------------------------
+$("changelogBtn").addEventListener("click", async () => {
+  openDrawer("changelogDrawer");
+  const list = $("changelogList");
+  list.innerHTML = '<div class="drawer-empty">Loading…</div>';
+  try {
+    const { entries } = await get("/api/changelog");
+    if (!entries.length) { list.innerHTML = '<div class="drawer-empty">No entries yet.</div>'; return; }
+    list.innerHTML = "";
+    for (const e of entries) {
+      const div = document.createElement("div");
+      div.className = "changelog-entry";
+      const scopeTag = e.scope === "plugin" ? "Plugin" : e.scope === "website" ? "Website" : "Both";
+      div.innerHTML =
+        `<div class="chead"><span class="ctitle">${escapeHtml(e.title)}</span><span class="cscope cscope-${e.scope}">${scopeTag}</span></div>
+         <div class="cbody">${escapeHtml(e.body || "")}</div>
+         <div class="cmeta">${timeAgo(e.at)} · by ${escapeHtml(e.author || "admin")}</div>`;
+      list.appendChild(div);
+    }
+    // Mark as seen so the dot goes away.
+    if (entries[0].at > (state.user?.lastChangelogSeenAt || 0)) {
+      try { await post("/api/changelog/seen", { at: entries[0].at }); } catch {}
+      $("changelogBtn").classList.remove("dot");
+    }
+  } catch (e) { list.innerHTML = `<div class="drawer-empty">Couldn't load: ${escapeHtml(e.message)}</div>`; }
+});
 $("introClose").addEventListener("click", async () => {
   $("introModal").hidden = true;
   try { await post("/api/intro-seen", {}); } catch { /* non-critical */ }

@@ -1,6 +1,6 @@
 // Discord OAuth2 login + signed session cookies (HMAC, no external deps).
 import crypto from "node:crypto";
-import { upsertUser, getUser } from "./users.js";
+import { upsertUser, getUser, setDiscordRoles } from "./users.js";
 
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID || "";
 const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || "";
@@ -8,7 +8,15 @@ const REDIRECT_URI =
   process.env.DISCORD_REDIRECT_URI || "http://localhost:3000/auth/callback";
 const SESSION_SECRET =
   process.env.SESSION_SECRET || "dev-only-insecure-secret-change-me";
-const SCOPE = "identify";
+// `guilds.members.read` lets us fetch the user's roles in our server right
+// after login — without depending on the bot being up.
+const SCOPE = process.env.DISCORD_OAUTH_SCOPE || "identify guilds.members.read";
+const GUILD_ID = process.env.DISCORD_GUILD_ID || "";
+const TESTER_ROLE_NAME = (process.env.DISCORD_TESTER_ROLE || "tester").toLowerCase();
+const ADMIN_ROLE_NAME = (process.env.DISCORD_ADMIN_ROLE || "admin").toLowerCase();
+// Optional: a bot token used ONLY here, to look up role NAMES from role IDs
+// returned by the OAuth member endpoint.
+const BOT_TOKEN_FOR_LOOKUP = process.env.DISCORD_BOT_TOKEN || "";
 
 // In production (HTTPS), cookies must be Secure or browsers may drop them.
 // We infer "production" from an https redirect URI or NODE_ENV.
@@ -160,6 +168,39 @@ export function registerAuthRoutes(app) {
         globalName: me.global_name,
         avatar: me.avatar,
       });
+
+      // Best-effort: resolve the user's guild roles right now so the chat
+      // pipeline knows about tester/admin without waiting on the bot's role
+      // sweep. Requires guilds.members.read + a GUILD_ID + a bot token for
+      // role-name lookup.
+      if (GUILD_ID) {
+        try {
+          const memRes = await fetch(`https://discord.com/api/users/@me/guilds/${GUILD_ID}/member`, {
+            headers: { Authorization: `Bearer ${token.access_token}` },
+          });
+          if (memRes.ok) {
+            const member = await memRes.json();
+            const roleIds = Array.isArray(member.roles) ? member.roles : [];
+            let names = [];
+            if (BOT_TOKEN_FOR_LOOKUP && roleIds.length) {
+              const rolesRes = await fetch(`https://discord.com/api/guilds/${GUILD_ID}/roles`, {
+                headers: { Authorization: `Bot ${BOT_TOKEN_FOR_LOOKUP}` },
+              });
+              if (rolesRes.ok) {
+                const allRoles = await rolesRes.json();
+                const map = new Map(allRoles.map((r) => [r.id, (r.name || "").toLowerCase()]));
+                names = roleIds.map((id) => map.get(id)).filter(Boolean);
+              }
+            }
+            const tester = names.includes(TESTER_ROLE_NAME);
+            const admin = names.includes(ADMIN_ROLE_NAME);
+            await setDiscordRoles(user.id, { tester, admin });
+          }
+        } catch (e) {
+          console.warn("[auth] role lookup failed:", e.message);
+        }
+      }
+
       setSession(res, user.id);
       res.redirect("/");
     } catch (e) {

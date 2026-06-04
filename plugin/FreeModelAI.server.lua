@@ -18,6 +18,7 @@ local SETTINGS_TOKEN = "FreeModel_PluginToken"
 local backendUrl = (plugin:GetSetting(SETTINGS_URL) or "http://localhost:3000"):gsub("/+$", "")
 local pluginToken = plugin:GetSetting(SETTINGS_TOKEN)
 local polling = false
+local linkVerified = false -- true only after /api/link/verify returns ok
 
 -- Instance code system: assigns a stable 6-char code to each indexed instance.
 -- path -> code and code -> path. Persists across snapshot calls, cleared on unlink.
@@ -114,6 +115,15 @@ make("TextLabel", {
 	BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 22),
 	LayoutOrder = 1,
 }, headerCard)
+
+-- BETA badge so users know what they're running
+local betaBadge = make("TextLabel", {
+	Text = "  BETA  ", Font = Enum.Font.GothamBold, TextSize = 10,
+	TextColor3 = C.BG_ROOT, BackgroundColor3 = C.ACCENT,
+	BorderSizePixel = 0, Size = UDim2.new(0, 48, 0, 16),
+	LayoutOrder = 1,
+}, headerCard)
+make("UICorner", { CornerRadius = UDim.new(0, 3) }, betaBadge)
 
 -- Status row: dot + text
 local statusRow = make("Frame", {
@@ -342,6 +352,12 @@ local INDEX_CLASSES = {
 	Script = true, LocalScript = true, ModuleScript = true,
 	RemoteEvent = true, RemoteFunction = true,
 	BindableEvent = true, BindableFunction = true,
+	-- Asset-bearing instances the AI may want to edit by name.
+	Animation = true, KeyframeSequence = true,
+	Sound = true, ParticleEmitter = true,
+	Tool = true, Humanoid = true,
+	-- GUI roots — useful to reference by name.
+	ScreenGui = true, SurfaceGui = true, BillboardGui = true,
 }
 
 local function instancePath(inst)
@@ -960,13 +976,44 @@ local function startPolling()
 end
 
 local function refreshLinkedUI()
-	if pluginToken then
+	if pluginToken and linkVerified then
 		setStatus("Linked — listening for actions...", C.SUCCESS)
 		setStatusDot(C.SUCCESS)
 		startPolling()
+	elseif pluginToken and not linkVerified then
+		setStatus("Verifying link…", C.WARN)
+		setStatusDot(C.WARN)
 	else
 		setStatus("Not linked", C.TEXT_2)
 		setStatusDot(C.TEXT_3)
+	end
+end
+
+-- Asks the server whether our stored token is still valid. The plugin used to
+-- assume "we have a token therefore we're linked", which left the UI lying as
+-- "Linked" after a server restart wiped the token. Now we ALWAYS verify before
+-- believing it.
+local function verifyStoredLink()
+	if not pluginToken then
+		linkVerified = false
+		refreshLinkedUI()
+		return
+	end
+	setStatus("Verifying link…", C.WARN)
+	setStatusDot(C.WARN)
+	local data, err = request("POST", "/api/link/verify")
+	if data then
+		linkVerified = true
+		refreshLinkedUI()
+	else
+		-- 401 / unknown link / server cold-started: the stored token is dead.
+		linkVerified = false
+		pluginToken = nil
+		plugin:SetSetting(SETTINGS_TOKEN, nil)
+		instanceCodeByPath = {}
+		instancePathByCode = {}
+		setStatus("Link expired — paste a new code.", C.DANGER)
+		setStatusDot(C.DANGER)
 	end
 end
 
@@ -1001,6 +1048,7 @@ linkBtn.MouseButton1Click:Connect(function()
 	end
 	pluginToken = data.pluginToken
 	plugin:SetSetting(SETTINGS_TOKEN, pluginToken)
+	linkVerified = true -- we just confirmed; no need to re-verify on the same call
 	codeBox.Text = ""
 	logMessage("Linked to Spider. AI can now build here.", "system", C.SUCCESS)
 	refreshLinkedUI()
@@ -1008,6 +1056,7 @@ end)
 
 unlinkBtn.MouseButton1Click:Connect(function()
 	pluginToken = nil
+	linkVerified = false
 	polling = false
 	plugin:SetSetting(SETTINGS_TOKEN, nil)
 	-- Clear code tables so old codes don't persist across re-links
@@ -1046,10 +1095,85 @@ sendBtn.MouseButton1Click:Connect(sendChat)
 chatBox.FocusLost:Connect(function(enter) if enter then sendChat() end end)
 
 -- ===========================================================================
+-- Code search — when the AI emits a find_code or read_script action, the
+-- plugin resolves the target and returns the source so the AI can see it on
+-- the very next turn. This lets "edit CombatScript in the tycoon" work.
+-- ===========================================================================
+local function executeFindCode(a)
+	local target = a.target or a.name or ""
+	local className = a.className or nil
+	local q = target:lower()
+	if q == "" then return false, "find_code", "no target name given" end
+	local hits = {}
+	for p in pairs(instanceCodeByPath) do
+		if p:lower():find(q, 1, true) then table.insert(hits, p) end
+	end
+	if #hits == 0 then
+		local function search(inst, depth)
+			if depth > 18 then return end
+			for _, child in ipairs(inst:GetChildren()) do
+				if child.Name:lower():find(q, 1, true) and child:IsA("LuaSourceContainer") then
+					if not className or child.ClassName == className then
+						table.insert(hits, instancePath(child))
+					end
+				end
+				search(child, depth + 1)
+			end
+		end
+		for _, svcName in ipairs(SNAPSHOT_SERVICES) do
+			local oks, s = pcall(function() return game:GetService(svcName) end)
+			if oks and s then search(s, 1) end
+		end
+	end
+	if #hits == 0 then return false, "find_code", "no script matching '" .. target .. "'" end
+	local inst = resolvePath(hits[1])
+	if not inst or not inst:IsA("LuaSourceContainer") then
+		return false, "find_code", hits[1] .. " is not a Lua source container"
+	end
+	local oks, src = pcall(function() return inst.Source end)
+	if not oks then return false, "find_code", "cannot read source of " .. hits[1] end
+	if pluginToken and src then
+		request("POST", "/api/context", {
+			context = "-- Script find_code hit: " .. hits[1] .. "\n```lua\n" .. src .. "\n```\n",
+		})
+	end
+	return true, string.format("found %d match(es) for '%s' — top hit %s (%d chars)",
+		#hits, target, hits[1], #(src or ""))
+end
+
+local origExecuteAction = executeAction
+executeAction = function(a)
+	local t = a.type
+	if t == "find_code" then
+		local ok, sum, err = executeFindCode(a)
+		return ok, "find_code", sum or err
+	elseif t == "read_script" then
+		local inst, resolvedPath, ierr = resolveTarget({ targetCode = a.targetCode, path = a.path or a.parent })
+		if not inst then return false, "read_script", ierr end
+		if not inst:IsA("LuaSourceContainer") then
+			return false, "read_script", (resolvedPath or "?") .. " is not a script"
+		end
+		local oks, src = pcall(function() return inst.Source end)
+		if not oks then return false, "read_script", tostring(src) end
+		if pluginToken and src and resolvedPath then
+			request("POST", "/api/context", {
+				context = "-- Script read_script: " .. resolvedPath .. "\n```lua\n" .. src .. "\n```\n",
+			})
+		end
+		return true, string.format("read script %s (%d chars)", resolvedPath or "?", #(src or ""))
+	end
+	return origExecuteAction(a)
+end
+
+-- ===========================================================================
 -- Toolbar toggle + boot
 -- ===========================================================================
 button.Click:Connect(function()
 	widget.Enabled = not widget.Enabled
 end)
 
-refreshLinkedUI()
+-- Boot: verify stored token against the server so a stale token doesn't
+-- sit in the UI as "Linked" after a server restart.
+task.spawn(function()
+	verifyStoredLink()
+end)
