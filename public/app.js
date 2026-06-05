@@ -42,6 +42,15 @@ async function init() {
   // Show active role badges under the account name.
   renderRoleBadges(me.user.roles);
 
+  // Gate the Animate button: admin/tester get access, everyone else sees coming-soon.
+  if (me.user.roles?.admin || me.user.roles?.tester) {
+    $("animateBtn").classList.remove("coming-soon");
+    $("animateBtn").title = "Live Animation Creator — upload a video, AI maps the motion to your R15 rig";
+  } else {
+    $("animateBtn").classList.add("coming-soon");
+    $("animateBtn").title = "Coming soon — Live Animation Creator (tester beta)";
+  }
+
   // Populate the model dropdown from the server (honors gating).
   await loadModelList();
 
@@ -238,9 +247,129 @@ $("webSearchBtn").addEventListener("click", () => {
   $("chatInput").focus();
 });
 
-// Animate button — coming soon
+// Animate button — role-gated: admin/tester get the full tool, others see coming-soon
 $("animateBtn").addEventListener("click", () => {
-  flash("🎬 Live Animation Creator is coming soon — upload a video, AI maps the motion to your R15 rig.");
+  const roles = state.user?.roles || {};
+  if (!roles.admin && !roles.tester) {
+    $("animateBtn").classList.add("coming-soon");
+    flash("🎬 Live Animation Creator is in closed beta — tester role required.");
+    return;
+  }
+  $("animateBtn").classList.remove("coming-soon");
+  openDrawer("animateDrawer");
+  $("animateRigName").focus();
+});
+
+// ---- Animate drawer: video drop zone -------------------------------------
+const animateDrop = $("animateDrop");
+const animateFileInput = $("animateFileInput");
+const animateVideo = $("animateVideo");
+const animatePreview = $("animatePreview");
+const animateFramesInfo = $("animateFramesInfo");
+const animateFramesText = $("animateFramesText");
+const animateFileLabel = $("animateFileLabel");
+
+let animateFrames = []; // base64 data URLs of extracted frames
+
+animateDrop.addEventListener("click", () => animateFileInput.click());
+animateDrop.addEventListener("dragover", (e) => { e.preventDefault(); animateDrop.classList.add("drag-over"); });
+animateDrop.addEventListener("dragleave", () => animateDrop.classList.remove("drag-over"));
+animateDrop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  animateDrop.classList.remove("drag-over");
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith("video/")) loadAnimateVideo(file);
+});
+
+animateFileInput.addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (file) loadAnimateVideo(file);
+});
+
+function loadAnimateVideo(file) {
+  if (file.size > 100 * 1024 * 1024) {
+    flash("Video is too large (max 100MB).");
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  animateVideo.src = url;
+  animatePreview.hidden = false;
+  animateFileLabel.textContent = file.name + " (" + (file.size / (1024 * 1024)).toFixed(1) + " MB)";
+  extractAnimateFrames();
+}
+
+async function extractAnimateFrames() {
+  animateFrames = [];
+  animateFramesInfo.hidden = true;
+  $("animateRun").disabled = true;
+  $("animateRun").textContent = "Extracting frames…";
+
+  const video = animateVideo;
+  // Wait for metadata to know the duration.
+  await new Promise((resolve) => { video.onloadedmetadata = resolve; if (video.readyState >= 1) resolve(); });
+
+  const duration = video.duration;
+  const frameCount = Math.min(12, Math.max(5, Math.floor(duration * 2))); // ~2 fps, 5–12 frames
+  const interval = duration / (frameCount + 1);
+
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+
+  // Seek to each interval and capture a frame.
+  for (let i = 1; i <= frameCount; i++) {
+    const t = interval * i;
+    await new Promise((resolve) => {
+      video.currentTime = t;
+      video.onseeked = resolve;
+    });
+    // Match source dimensions, capped for model context.
+    const maxDim = 640;
+    let w = video.videoWidth, h = video.videoHeight;
+    if (w > maxDim || h > maxDim) {
+      const scale = maxDim / Math.max(w, h);
+      w = Math.round(w * scale); h = Math.round(h * scale);
+    }
+    canvas.width = w; canvas.height = h;
+    ctx.drawImage(video, 0, 0, w, h);
+    animateFrames.push(canvas.toDataURL("image/jpeg", 0.75));
+  }
+
+  animateFramesInfo.hidden = false;
+  animateFramesText.textContent = `✓ Extracted ${animateFrames.length} frames at ~2 fps (${canvas.width}x${canvas.height})`;
+  $("animateRun").disabled = false;
+  $("animateRun").textContent = "🎬 Generate Animation";
+}
+
+// ---- Animate: send to AI -------------------------------------------------
+$("animateRun").addEventListener("click", async () => {
+  const rigName = $("animateRigName").value.trim();
+  if (!rigName) { $("animateError").hidden = false; $("animateError").textContent = "Enter the R15 rig name."; return; }
+  if (!animateFrames.length) { $("animateError").hidden = false; $("animateError").textContent = "Load a video first."; return; }
+
+  $("animateError").hidden = true;
+  $("animateRun").disabled = true;
+  $("animateRun").textContent = "Sending to AI…";
+  const status = $("animateStatus");
+  setStatus(status, "AI is analyzing the video frames…");
+
+  // Build attachments from extracted frames (first 6 for context window).
+  const attachments = animateFrames.slice(0, 8).map((dataUrl, i) => ({
+    kind: "image",
+    name: `frame_${i + 1}.jpg`,
+    dataUrl,
+  }));
+
+  const message = `[ANIMATE MODE] Target R15 rig: "${rigName}". ` +
+    `Above are ${attachments.length} frames extracted from my video at regular intervals. ` +
+    `Analyze the body movement across these frames and create a Roblox animation ` +
+    `that reproduces this motion on the R15 rig "${rigName}". ` +
+    `Find "${rigName}" in the Code-Index, look for its Humanoid, and insert a ` +
+    `matching free animation + a loader script.`;
+
+  // Close drawer and send via normal chat flow.
+  closeDrawers();
+  await sendChat(message, "🎬 Create animation from video on " + rigName, attachments);
+  setStatus(status, "");
 });
 
 // Optimize prompt drawer
@@ -690,6 +819,7 @@ function openDrawer(id) { $(id).hidden = false; $("drawerScrim").hidden = false;
 function closeDrawers() {
   $("historyDrawer").hidden = true;
   $("optimizeDrawer").hidden = true;
+  $("animateDrawer").hidden = true;
   $("drawerScrim").hidden = true;
 }
 $("drawerScrim").addEventListener("click", closeDrawers);

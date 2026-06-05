@@ -846,6 +846,38 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
         "explicitly asked to insert an existing free model.",
     });
   }
+  // "Animate" mode: video-to-R15-rig animation via extracted frames.
+  if (mode === "animate") {
+    messages.push({
+      role: "system",
+      content:
+        "ANIMATE MODE — LIVE ANIMATION CREATOR:\n" +
+        "The user uploaded a video and wants you to create a Roblox animation " +
+        "that reproduces the body movement onto their R15 rig.\n\n" +
+        "You are receiving FRAMES extracted at regular intervals from the video as " +
+        "images. Study them carefully: observe pose changes across frames — joint " +
+        "angles, limb positions, body orientation, timing between frames.\n\n" +
+        "The user specifies a target R15 rig name. Look it up in the Code-Index.\n\n" +
+        "R15 Motor6D joints you can drive:\n" +
+        "  LowerTorso: Root, Waist\n" +
+        "  UpperTorso: Waist(inverse), LeftShoulder, RightShoulder\n" +
+        "  LeftUpperArm/RightUpperArm: LeftShoulder/RightShoulder, LeftElbow/RightElbow\n" +
+        "  LeftLowerArm/RightLowerArm: LeftElbow/RightElbow, LeftWrist/RightWrist\n" +
+        "  LeftUpperLeg/RightUpperLeg: LeftHip/RightHip, LeftKnee/RightKnee\n" +
+        "  LeftLowerLeg/RightLowerLeg: LeftKnee/RightKnee, LeftAnkle/RightAnkle\n" +
+        "  Head: Neck\n\n" +
+        "BUILD PLAN:\n" +
+        "1. In your 'thinking', describe what motion you observe in each frame\n" +
+        "2. Find or create an Animator under the rig's Humanoid if missing\n" +
+        "3. Use insert_free_animation with a query matching the observed motion\n" +
+        "   (e.g. 'walk animation', 'dance animation', 'fight animation')\n" +
+        "4. Create a LocalScript that loads and plays the animation on the rig\n" +
+        "5. If no catalog animation matches, describe the key poses you'd author\n" +
+        "   and emit a create_script with a KeyframeSequence loader\n\n" +
+        "Prefer insert_free_animation with a good query over building keyframes " +
+        "manually — the catalog has thousands of humanoid animations.",
+    });
+  }
   // Inject the live place snapshot (instance tree + script sources + selection)
   // so the model can read existing code and context before acting.
   if (typeof context === "string" && context.trim()) {

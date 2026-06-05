@@ -163,10 +163,9 @@
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                 <span>Optimize</span>
               </button>
-              <button type="button" id="animateBtn" class="mode-btn coming-soon" title="Coming soon — Live Animation Creator: upload a video, AI analyzes the motion, and applies it to your R15 rig">
+              <button type="button" id="animateBtn" class="mode-btn" title="Live Animation Creator — upload a video, AI maps the motion to your R15 rig">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 <span>Animate</span>
-                <span class="cs-badge">Soon</span>
               </button>
               <label class="think-select" title="How hard the model reasons before answering">
                 <span class="ts-ico">🧠</span>
@@ -213,6 +212,37 @@
         <span class="changelog-scope">v1.0.0-beta</span>
       </div>
       <div class="drawer-list" id="changelogList"></div>
+    </div>
+
+    <!-- ANIMATE DRAWER -->
+    <div class="drawer" id="animateDrawer" hidden>
+      <div class="drawer-head">
+        <h3>🎬 Live Animation Creator</h3>
+        <button class="drawer-x" data-close="animateDrawer">✕</button>
+      </div>
+      <p class="drawer-hint">Upload a video of a person moving — the AI maps the motion to your R15 rig in Studio.</p>
+
+      <label class="field">Target R15 rig name <span class="hint-inline">(must exist in Workspace)</span></label>
+      <input type="text" id="animateRigName" class="opt-input" placeholder="e.g. Rig, Character, Avatar" style="min-height:auto;height:38px;" />
+
+      <label class="field" style="margin-top:12px;">Video file</label>
+      <div class="animate-drop" id="animateDrop">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <span id="animateFileLabel">Drop a video or click to browse</span>
+        <input type="file" id="animateFileInput" accept="video/*" hidden />
+      </div>
+
+      <div class="animate-frames-info" id="animateFramesInfo" hidden>
+        <span class="afi-ok" id="animateFramesText"></span>
+      </div>
+
+      <div class="animate-preview" id="animatePreview" hidden>
+        <video id="animateVideo" controls muted style="width:100%;max-height:180px;border-radius:var(--r-md);background:var(--bg-input);"></video>
+      </div>
+
+      <button id="animateRun" class="primary opt-run">🎬 Generate Animation</button>
+      <div class="opt-error" id="animateError" hidden></div>
+      <div class="status" id="animateStatus"></div>
     </div>
 
     <!-- OPTIMIZE DRAWER -->
