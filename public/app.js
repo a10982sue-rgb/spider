@@ -238,6 +238,11 @@ $("webSearchBtn").addEventListener("click", () => {
   $("chatInput").focus();
 });
 
+// Animate button — coming soon
+$("animateBtn").addEventListener("click", () => {
+  flash("🎬 Live Animation Creator is coming soon — upload a video, AI maps the motion to your R15 rig.");
+});
+
 // Optimize prompt drawer
 $("optimizeBtn").addEventListener("click", () => {
   const current = $("chatInput").value.trim();

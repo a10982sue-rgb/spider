@@ -780,7 +780,6 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
     let tag = "FreeModel";
     if (baseUrl) {
       if (baseUrl.includes("xn--vduyey89e") || baseUrl.includes("kiro")) tag = "Kiro";
-      else if (baseUrl.includes("lightning.ai")) tag = "Lightning";
       else tag = "Upstream";
     }
     // 402 with a "freemodel" body coming from kiro/lightning would be misleading;
@@ -990,7 +989,7 @@ export function listAvailableModels(roles = {}) {
     { id: "gpt-5.4", label: "gpt-5.4 (recommended) — 100 credits", family: "openai", cost: 100, gated: false },
     { id: "gpt-5.5", label: "gpt-5.5 (tester) — 150 credits", family: "openai", cost: 150, gated: true },
     { id: "gpt-5.6", label: "gpt-5.6 (tester) — 200 credits", family: "openai", cost: 200, gated: true },
-    { id: "opus-4.8", label: "Opus 4.8 — 500 credits", family: "anthropic", cost: 500, gated: false },
+    { id: "opus-4.8", label: "Opus 4.8 (Kiro) — 500 credits", family: "anthropic", cost: 500, gated: false },
     { id: "kiro-high", label: "Opus 4.8 — high cache — 500", family: "anthropic", cost: 500, gated: false },
     { id: "kiro-low", label: "Opus 4.8 — low cache — 500", family: "anthropic", cost: 500, gated: false },
     { id: "kiro-max-cc", label: "Opus 4.8 — MAX-CC — 500", family: "anthropic", cost: 500, gated: false },
@@ -1009,6 +1008,7 @@ const KIRO_BASE_URL = (process.env.KIRO_BASE_URL || "https://xn--vduyey89e.com")
 const KIRO_DEFAULT_KEY = "sk-oQNftENsrc1Ccym8ixlAsDC0wcHCkeeBlHqCi7VnZZS6jfX0";
 
 const KIRO_MODELS = {
+  "opus-4.8":     "[kiro量高缓]claude-opus-4-8",
   "kiro-high":    "[kiro量高缓]claude-opus-4-8",
   "kiro-low":     "[kiro量低缓]claude-opus-4-8",
   "kiro-max-cc":  "[MAX-CC]claude-opus-4-8",
@@ -1031,41 +1031,6 @@ export async function runChatKiro(opts) {
     baseUrl: `${KIRO_BASE_URL}/v1`,
     withReasoning: false,
   });
-}
-
-// === LIGHTNING (Opus 4.8) ==================================================
-// Lightning exposes an OpenAI-compatible LLM endpoint at lightning.ai/api/v1
-// authenticated with sk-lit-... API keys. Same wire protocol as FreeModel,
-// so we delegate to runChat with the upstream overridden. reasoning_effort
-// is suppressed because Anthropic models on Lightning don't accept it.
-// The model id can be overridden with LIGHTNING_MODEL — Lightning's catalog
-// uses provider-prefixed slugs (e.g. "anthropic/claude-opus-4-8").
-
-const LIGHTNING_BASE_URL = "https://lightning.ai/api/v1";
-const LIGHTNING_DEFAULT_MODEL = "anthropic/claude-opus-4-8";
-
-export async function runChatLightning(opts) {
-  const apiKey = resolveKey("LIGHTNING_API_KEY", "");
-  if (!apiKey) {
-    throw new Error("LIGHTNING_API_KEY is not set on the server");
-  }
-  const requested = (process.env.LIGHTNING_MODEL || LIGHTNING_DEFAULT_MODEL).trim();
-  const origStatus = opts.onStatus;
-  const onStatus = (s) => { if (typeof origStatus === "function") { try { origStatus(s); } catch {} } };
-  const result = await runChat({
-    ...opts,
-    apiKey,
-    model: requested,
-    baseUrl: LIGHTNING_BASE_URL,
-    withReasoning: false,
-    onStatus,
-  });
-  if (result.actualModel && !result.actualModel.toLowerCase().includes(requested.split("/").pop().toLowerCase())) {
-    const msg = `Lightning routed to "${result.actualModel}" instead of "${requested}". Check your Lightning model catalog.`;
-    console.warn("[lightning]", msg);
-    onStatus(msg);
-  }
-  return result;
 }
 
 // === CUSTOM (admin-registered) =============================================

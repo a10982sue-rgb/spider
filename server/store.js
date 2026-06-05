@@ -28,6 +28,7 @@ export function createLink() {
     results: [],           // results reported back by the plugin
     context: null,         // latest place snapshot from the plugin (string)
     contextAt: 0,          // when the snapshot was last updated
+    pluginConvoId: null,   // persistent conversation id for plugin chat (survives restarts)
     createdAt: Date.now(),
   };
   links.set(linkId, link);

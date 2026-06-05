@@ -6,7 +6,7 @@ import {
   confirmLink, queueActions, drainQueue, setContext, appendContextNote,
 } from "./store.js";
 import {
-  runChat, runChatLightning, runChatKiro, runChatCustom,
+  runChat, runChatKiro, runChatCustom,
   isKiroModel, isCustomModel, isModelGated, modelCost, streamOnce,
   listAvailableModels,
 } from "./ai.js";
@@ -71,36 +71,6 @@ app.get("/api/me", async (req, res) => {
 app.post("/api/intro-seen", requireUser, (req, res) => {
   markIntroSeen(req.user.id);
   res.json({ ok: true });
-});
-
-// Diagnostic: hits Lightning with the env key the same way curl would, so we
-// can see whether the key in env is reaching the upstream correctly.
-app.get("/api/lightning/diag", async (req, res) => {
-  const key = (process.env.LIGHTNING_API_KEY || "").trim();
-  if (!key) return res.status(500).json({ ok: false, error: "LIGHTNING_API_KEY not set" });
-  const model = (process.env.LIGHTNING_MODEL || "anthropic/claude-opus-4-8").trim();
-  try {
-    const upstream = await fetch("https://lightning.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: [{ type: "text", text: "Reply with the literal word: pong" }] }],
-      }),
-    });
-    const text = await upstream.text();
-    res.status(200).json({
-      keyPrefix: `${key.slice(0, 10)}…${key.slice(-4)}`,
-      keyLength: key.length,
-      keyHasWhitespace: /\s/.test(key),
-      keyHasNonAscii: /[^\x20-\x7e]/.test(key),
-      model,
-      upstreamStatus: upstream.status,
-      upstreamBody: text.slice(0, 1500),
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e.message || e) });
-  }
 });
 
 // === CONVERSATION HISTORY (per Discord user, persistent) ===================
@@ -389,7 +359,7 @@ app.post("/api/chat", async (req, res) => {
       ? runChatCustom
       : isKiroModel(link.model)
         ? runChatKiro
-        : link.model === "opus-4.8" ? runChatLightning : runChat;
+        : runChat;
     const { thinking, reply, actions, plan, truncated, salvaged } = await chatFn({
       apiKey: link.apiKey,
       model: link.model,
@@ -578,7 +548,7 @@ function requireAdmin(req, res, next) {
 // Admin: list / set / delete API keys (rotated at runtime, no redeploy).
 app.get("/api/admin/keys", requireAdmin, (req, res) => {
   // Return only the names — never the values.
-  const env = ["DEFAULT_API_KEY", "KIRO_API_KEY", "LIGHTNING_API_KEY"];
+  const env = ["DEFAULT_API_KEY", "KIRO_API_KEY"];
   const overridden = listApiKeyNames();
   const merged = Array.from(new Set([...env, ...overridden]));
   res.json({ keys: merged.map((name) => ({ name, overridden: overridden.includes(name) })) });
@@ -658,19 +628,39 @@ app.post("/api/plugin/chat", async (req, res) => {
 
   const message = (req.body?.message || "").toString();
   if (!message.trim()) return res.status(400).json({ error: "empty message" });
-  link.history.push({ role: "user", content: message });
+
+  // Persist plugin chat to the owner's conversation store so memory survives
+  // server restarts and is shared with the browser chat.
+  let history = link.history || [];
+  if (owner) {
+    try {
+      link.pluginConvoId = await appendMessage(owner.id, link.pluginConvoId, { role: "user", content: message });
+      const convo = await getConversation(owner.id, link.pluginConvoId);
+      if (convo) history = convo.messages.map((m) => ({ role: m.role, content: m.content }));
+    } catch { /* fall back to ephemeral history */ }
+  }
+  if (!history.length || history[history.length - 1]?.content !== message) {
+    history.push({ role: "user", content: message });
+  }
+  link.history = history;
 
   try {
     const chatFn = isCustomModel(link.model)
       ? runChatCustom
       : isKiroModel(link.model)
         ? runChatKiro
-        : link.model === "opus-4.8" ? runChatLightning : runChat;
+        : runChat;
     const { thinking, reply, actions } = await chatFn({
       apiKey: link.apiKey, model: link.model, history: link.history,
       context: link.context,
     });
     link.history.push({ role: "assistant", content: reply });
+    // Persist the assistant response too.
+    if (owner) {
+      try {
+        link.pluginConvoId = await appendMessage(owner.id, link.pluginConvoId, { role: "assistant", content: reply });
+      } catch { /* non-critical */ }
+    }
     const buildActions = actions.filter((a) => a && a.type);
     const queued = buildActions.length ? queueActions(link, buildActions) : [];
     let credits;

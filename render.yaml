@@ -38,7 +38,3 @@ services:
         sync: false
       - key: UPSTASH_REDIS_REST_TOKEN
         sync: false
-      # Lightning AI — required for the opus-4.8 model option.
-      # sk-lit-... API key from your Lightning account.
-      - key: LIGHTNING_API_KEY
-        sync: false

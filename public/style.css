@@ -743,6 +743,35 @@ button.primary:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; 
   box-shadow: 0 4px 14px rgba(8, 145, 178, 0.35);
 }
 
+/* Coming-soon button — disabled look with a subtle pulse */
+.mode-btn.coming-soon {
+  opacity: 0.55;
+  cursor: not-allowed;
+  position: relative;
+  overflow: visible;
+}
+.mode-btn.coming-soon:hover {
+  color: var(--text-2);
+  border-color: var(--border-strong);
+  background: transparent;
+}
+.cs-badge {
+  display: inline-flex; align-items: center;
+  padding: 1px 5px;
+  font-size: 9px; font-weight: 700;
+  color: #001318;
+  background: var(--grad-accent);
+  border-radius: var(--r-pill);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  box-shadow: 0 2px 6px rgba(8, 145, 178, 0.35);
+  animation: csPulse 2s ease-in-out infinite;
+}
+@keyframes csPulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
+}
+
 .think-select {
   position: relative;
   display: inline-flex; align-items: center; gap: 6px;

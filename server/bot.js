@@ -102,7 +102,6 @@ const commands = [
       .addChoices(
         { name: "DEFAULT_API_KEY (FreeModel)", value: "DEFAULT_API_KEY" },
         { name: "KIRO_API_KEY", value: "KIRO_API_KEY" },
-        { name: "LIGHTNING_API_KEY", value: "LIGHTNING_API_KEY" },
       ))
     .addStringOption((o) => o.setName("value").setDescription("New value (leave blank to clear)").setRequired(false)),
   new SlashCommandBuilder()

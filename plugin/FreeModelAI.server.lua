@@ -395,7 +395,48 @@ local function captureSnapshot()
 		for _, child in ipairs(inst:GetChildren()) do
 			if nodes >= MAX_NODES then truncated = true; return end
 			nodes += 1
-			table.insert(out, string.format("%s- %s (%s)", indent(depth), child.Name, child.ClassName))
+			local extra = ""
+
+			-- Asset-bearing instances: include key properties so the AI knows
+			-- what's inside without needing find_code round-trips.
+			if child:IsA("Animation") then
+				local aid = pcall(function() return child.AnimationId end)
+				extra = string.format(' [AnimationId="%s"]', (aid and aid ~= "") and tostring(aid) or "(empty)")
+			elseif child:IsA("Sound") then
+				local sid = pcall(function() return child.SoundId end)
+				if sid and sid ~= "" then
+					local vol = pcall(function() return child.Volume end)
+					local loop = pcall(function() return child.Looped end)
+					extra = string.format(' [SoundId="%s", Volume=%.1f, Looped=%s]', tostring(sid), tonumber(vol) or 1, tostring(loop))
+				end
+			elseif child:IsA("Model") then
+				local pp = pcall(function() return child.PrimaryPart end)
+				if pp then
+					local ppName = pcall(function() return pp.Name end)
+					extra = string.format(" [PrimaryPart=%s, Children=%d]", ppName and tostring(ppName) or "?", #child:GetChildren())
+				else
+					extra = string.format(" [Children=%d]", #child:GetChildren())
+				end
+			elseif child:IsA("Tool") then
+				extra = string.format(" [Children=%d]", #child:GetChildren())
+			elseif child:IsA("KeyframeSequence") then
+				local kfs = pcall(function() return child:GetKeyframes() end)
+				if kfs and #kfs > 0 then
+					local poses = {}
+					for _, kf in ipairs(kfs) do
+						table.insert(poses, string.format("%.2f", kf.Time))
+					end
+					extra = string.format(" [%d keyframes at t=%s]", #kfs, table.concat(poses, ","))
+				else
+					extra = " [no keyframes]"
+				end
+			elseif child:IsA("ParticleEmitter") then
+				local en = pcall(function() return child.Enabled end)
+				local rate = pcall(function() return child.Rate end)
+				extra = string.format(" [Enabled=%s, Rate=%s]", tostring(en), tostring(rate))
+			end
+
+			table.insert(out, string.format("%s- %s (%s)%s", indent(depth), child.Name, child.ClassName, extra))
 
 			if INDEX_CLASSES[child.ClassName] then
 				local list = nameIndex[child.Name]
@@ -458,6 +499,11 @@ local function captureSnapshot()
 			"## Each entry gives a 6-character code you can use as the 'targetCode'",
 			"## field in your actions. Use the code to unambiguously reference an instance.",
 			"## The full path is always included as a fallback.",
+			"## ",
+			"## Asset-bearing instances (Animation, Sound, Model, KeyframeSequence, etc.)",
+			"## show their key properties inline in the tree above — look for",
+			"## [AnimationId=...], [SoundId=...], [PrimaryPart=...], [N keyframes...]",
+			"## annotations next to each entry in the service snapshots.",
 		}
 		for _, n in ipairs(names) do
 			local entries = nameIndex[n]
