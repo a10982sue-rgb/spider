@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createLink, getLink, getLinkByCode, getLinkByToken,
-  confirmLink, queueActions, drainQueue, setContext, appendContextNote,
+  confirmLink, unlinkByToken, queueActions, drainQueue, setContext, appendContextNote,
 } from "./store.js";
 import {
   runChat, isAvailableModel, isModelGated, modelCost, streamOnce,
@@ -666,6 +666,14 @@ app.get("/download/plugin", (_req, res) => {
   res.type("application/xml");
   res.set("Content-Disposition", 'attachment; filename="SpiderAI.rbxmx"');
   res.send(model);
+});
+
+app.post("/api/link/unlink", (req, res) => {
+  const token = bearer(req);
+  if (!token || !unlinkByToken(token)) {
+    return res.status(401).json({ error: "invalid plugin token" });
+  }
+  res.json({ ok: true });
 });
 
 // allow dotfiles so /.well-known/security.txt is served (trust signal).

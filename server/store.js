@@ -63,6 +63,18 @@ export function confirmLink(code, roblox) {
   return link;
 }
 
+export function unlinkByToken(token) {
+  const linkId = tokens.get(token);
+  if (!linkId) return false;
+  const link = links.get(linkId);
+  tokens.delete(token);
+  if (!link) return false;
+  link.linked = false;
+  link.pluginToken = null;
+  link.roblox = null;
+  return true;
+}
+
 export function queueActions(link, actions) {
   const batchId = id();
   const items = actions.map((a, i) => ({

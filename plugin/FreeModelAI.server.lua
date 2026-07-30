@@ -1,7 +1,7 @@
 --!nonstrict
 -- Spider AI — Roblox Studio plugin
 -- Links to the Spider website and lets the AI build in your game.
--- Version 2.0.2 — fixed connection UI + scrollable layout.
+-- Version 2.1.0 — redesigned interface + reliable server-side unlink.
 --
 -- Install: put this file in your Studio Plugins folder
 --   (Studio: right-click in the Explorer's Plugins, or use the menu
@@ -13,7 +13,7 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 local InsertService = game:GetService("InsertService")
 
-local PLUGIN_VERSION = "2.0.2"
+local PLUGIN_VERSION = "2.1.0"
 local DEFAULT_BACKEND_URL = "https://spider-web-ju2g.onrender.com"
 local SETTINGS_URL = "Spider_BackendUrl"
 local SETTINGS_TOKEN = "Spider_PluginToken"
@@ -30,32 +30,45 @@ local pluginToken = plugin:GetSetting(SETTINGS_TOKEN) or plugin:GetSetting(LEGAC
 local polling = false
 local linkVerified = false -- true only after /api/link/verify returns ok
 
+-- Migrate settings from versions that still used the FreeModel-prefixed keys.
+plugin:SetSetting(SETTINGS_URL, backendUrl)
+if pluginToken then plugin:SetSetting(SETTINGS_TOKEN, pluginToken) end
+plugin:SetSetting(LEGACY_SETTINGS_URL, nil)
+plugin:SetSetting(LEGACY_SETTINGS_TOKEN, nil)
+
+local function clearSavedToken()
+	plugin:SetSetting(SETTINGS_TOKEN, nil)
+	plugin:SetSetting(LEGACY_SETTINGS_TOKEN, nil)
+end
+
 -- Instance code system: assigns a stable 6-char code to each indexed instance.
 -- path -> code and code -> path. Persists across snapshot calls, cleared on unlink.
 local instanceCodeByPath = {}
 local instancePathByCode = {}
 
 -- ===========================================================================
--- Color palette — brutalist dark + cyan accent
+-- Color palette — matches the Spider web workspace.
 -- ===========================================================================
 local C = {
-	BG_ROOT    = Color3.fromRGB(0, 0, 0),
-	BG_CARD    = Color3.fromRGB(17, 17, 17),
-	BG_INPUT   = Color3.fromRGB(13, 13, 13),
-	BG_BUBBLE_USER = Color3.fromRGB(0, 60, 70),
-	BG_BUBBLE_AI   = Color3.fromRGB(22, 22, 22),
-	BG_BUBBLE_OK   = Color3.fromRGB(0, 45, 25),
-	BG_BUBBLE_ERR  = Color3.fromRGB(45, 0, 0),
-	BORDER     = Color3.fromRGB(42, 42, 42),
-	BORDER_H   = Color3.fromRGB(68, 68, 68),
-	ACCENT     = Color3.fromRGB(0, 229, 255),
-	ACCENT_DIM = Color3.fromRGB(0, 100, 120),
-	TEXT_1     = Color3.fromRGB(224, 224, 224),
-	TEXT_2     = Color3.fromRGB(136, 136, 136),
-	TEXT_3     = Color3.fromRGB(85, 85, 85),
-	SUCCESS    = Color3.fromRGB(0, 255, 140),
-	DANGER     = Color3.fromRGB(255, 51, 51),
-	WARN       = Color3.fromRGB(255, 170, 0),
+	BG_ROOT    = Color3.fromRGB(7, 9, 13),
+	BG_CARD    = Color3.fromRGB(16, 20, 28),
+	BG_RAISED  = Color3.fromRGB(23, 28, 38),
+	BG_INPUT   = Color3.fromRGB(12, 16, 23),
+	BG_BUBBLE_USER = Color3.fromRGB(8, 92, 111),
+	BG_BUBBLE_AI   = Color3.fromRGB(18, 24, 33),
+	BG_BUBBLE_OK   = Color3.fromRGB(7, 48, 36),
+	BG_BUBBLE_ERR  = Color3.fromRGB(56, 20, 25),
+	BORDER     = Color3.fromRGB(36, 43, 55),
+	BORDER_H   = Color3.fromRGB(69, 83, 102),
+	ACCENT     = Color3.fromRGB(103, 232, 249),
+	ACCENT_H   = Color3.fromRGB(165, 243, 252),
+	ACCENT_DIM = Color3.fromRGB(8, 105, 128),
+	TEXT_1     = Color3.fromRGB(247, 249, 252),
+	TEXT_2     = Color3.fromRGB(170, 180, 196),
+	TEXT_3     = Color3.fromRGB(117, 129, 150),
+	SUCCESS    = Color3.fromRGB(16, 185, 129),
+	DANGER     = Color3.fromRGB(248, 113, 113),
+	WARN       = Color3.fromRGB(245, 158, 11),
 }
 
 -- ===========================================================================
@@ -76,7 +89,8 @@ local function card(props, parent)
 		BorderSizePixel = 0,
 		LayoutOrder = props.Order or 0,
 	}, parent)
-	make("UICorner", { CornerRadius = UDim.new(0, 6) }, f)
+	make("UICorner", { CornerRadius = UDim.new(0, 10) }, f)
+	make("UIStroke", { Color = C.BORDER, Thickness = 1, Transparency = 0.15 }, f)
 	if props.Pad then
 		make("UIPadding", {
 			PaddingTop = UDim.new(0, props.Pad), PaddingBottom = UDim.new(0, props.Pad),
@@ -98,7 +112,7 @@ button.ClickableWhenViewportHidden = true
 
 local widget = plugin:CreateDockWidgetPluginGui(
 	"SpiderAI",
-	DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Right, false, false, 340, 540, 300, 380)
+	DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Right, false, false, 370, 650, 320, 460)
 )
 widget.Title = "Spider AI"
 
@@ -113,37 +127,56 @@ local root = make("ScrollingFrame", {
 	ScrollBarImageColor3 = C.BORDER_H,
 }, widget)
 make("UIPadding", {
-	PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
-	PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8),
+	PaddingTop = UDim.new(0, 10), PaddingBottom = UDim.new(0, 10),
+	PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10),
 }, root)
 make("UIListLayout", {
-	Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
+	Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder,
 }, root)
 
 -- Header card
-local headerCard = card({ Order = 1, Pad = 10, List = 2 })
+local headerCard = card({ Order = 1, Pad = 12, List = 4 })
 headerCard.Parent = root
 
 make("TextLabel", {
-	Text = "Spider AI  ·  v" .. PLUGIN_VERSION, Font = Enum.Font.GothamBold, TextSize = 18,
-	TextColor3 = C.TEXT_1, TextXAlignment = Enum.TextXAlignment.Left,
-	BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 22),
+	Text = "SPIDER WORKSPACE", Font = Enum.Font.GothamBold, TextSize = 9,
+	TextColor3 = C.ACCENT, TextXAlignment = Enum.TextXAlignment.Left,
+	BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 12),
 	LayoutOrder = 1,
 }, headerCard)
 
--- BETA badge so users know what they're running
-local betaBadge = make("TextLabel", {
-	Text = "  BETA  ", Font = Enum.Font.GothamBold, TextSize = 10,
-	TextColor3 = C.BG_ROOT, BackgroundColor3 = C.ACCENT,
-	BorderSizePixel = 0, Size = UDim2.new(0, 48, 0, 16),
-	LayoutOrder = 1,
+local titleRow = make("Frame", {
+	Size = UDim2.new(1, 0, 0, 26), BackgroundTransparency = 1,
+	BorderSizePixel = 0, LayoutOrder = 2,
 }, headerCard)
-make("UICorner", { CornerRadius = UDim.new(0, 3) }, betaBadge)
+
+make("TextLabel", {
+	Text = "Build in Studio", Font = Enum.Font.GothamBold, TextSize = 19,
+	TextColor3 = C.TEXT_1, TextXAlignment = Enum.TextXAlignment.Left,
+	BackgroundTransparency = 1, Size = UDim2.new(1, -78, 1, 0),
+}, titleRow)
+
+local versionBadge = make("TextLabel", {
+	Text = "v" .. PLUGIN_VERSION, Font = Enum.Font.GothamBold, TextSize = 9,
+	TextColor3 = C.ACCENT, BackgroundColor3 = C.BG_RAISED,
+	BorderSizePixel = 0, AnchorPoint = Vector2.new(1, 0.5),
+	Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.new(0, 70, 0, 20),
+}, titleRow)
+make("UICorner", { CornerRadius = UDim.new(1, 0) }, versionBadge)
+make("UIStroke", { Color = C.ACCENT_DIM, Thickness = 1, Transparency = 0.15 }, versionBadge)
+
+make("TextLabel", {
+	Text = "Your AI build bridge for Roblox Studio.",
+	Font = Enum.Font.Gotham, TextSize = 10.5,
+	TextColor3 = C.TEXT_3, TextXAlignment = Enum.TextXAlignment.Left,
+	BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16),
+	LayoutOrder = 3,
+}, headerCard)
 
 -- Status row: dot + text
 local statusRow = make("Frame", {
 	Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1,
-	BorderSizePixel = 0, LayoutOrder = 2,
+	BorderSizePixel = 0, LayoutOrder = 4,
 }, headerCard)
 make("UIListLayout", {
 	FillDirection = Enum.FillDirection.Horizontal,
@@ -168,8 +201,22 @@ local statusLabel = make("TextLabel", {
 }, statusRow)
 
 -- Connection card
-local connCard = card({ Order = 2, Pad = 10, List = 6 })
+local connCard = card({ Order = 2, Pad = 12, List = 7 })
 connCard.Parent = root
+
+make("TextLabel", {
+	Text = "CONNECT STUDIO", Font = Enum.Font.GothamBold, TextSize = 10,
+	TextColor3 = C.TEXT_2, TextXAlignment = Enum.TextXAlignment.Left,
+	BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 14),
+	LayoutOrder = 1,
+}, connCard)
+make("TextLabel", {
+	Text = "Paste the pairing code shown on the Spider website.",
+	Font = Enum.Font.Gotham, TextSize = 10.5,
+	TextColor3 = C.TEXT_3, TextXAlignment = Enum.TextXAlignment.Left,
+	TextWrapped = true, BackgroundTransparency = 1,
+	Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 2,
+}, connCard)
 
 local function connLabel(text)
 	return make("TextLabel", {
@@ -183,73 +230,94 @@ end
 local function connInput(placeholder, order)
 	local box = make("TextBox", {
 		PlaceholderText = placeholder, Text = "", ClearTextOnFocus = false,
-		Font = Enum.Font.Gotham, TextSize = 13, TextColor3 = C.TEXT_1,
+		Font = Enum.Font.Gotham, TextSize = 12.5, TextColor3 = C.TEXT_1,
 		PlaceholderColor3 = C.TEXT_3,
-		BackgroundColor3 = C.BG_INPUT, BorderColor3 = C.BORDER,
-		Size = UDim2.new(1, 0, 0, 32), TextXAlignment = Enum.TextXAlignment.Left,
+		BackgroundColor3 = C.BG_INPUT, BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 0, 36), TextXAlignment = Enum.TextXAlignment.Left,
 		LayoutOrder = order or 0,
 	})
-	make("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, box)
-	make("UICorner", { CornerRadius = UDim.new(0, 4) }, box)
+	make("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, box)
+	make("UICorner", { CornerRadius = UDim.new(0, 8) }, box)
+	local stroke = make("UIStroke", { Color = C.BORDER, Thickness = 1, Transparency = 0 }, box)
+	box.Focused:Connect(function() stroke.Color = C.ACCENT_DIM end)
+	box.FocusLost:Connect(function() stroke.Color = C.BORDER end)
 	return box
 end
 
 local function connBtn(text, order, accent)
+	local baseColor = accent and C.ACCENT or C.BG_RAISED
+	local hoverColor = accent and C.ACCENT_H or C.BG_INPUT
 	local b = make("TextButton", {
 		Text = text, Font = Enum.Font.GothamBold, TextSize = 13,
-		TextColor3 = C.TEXT_1,
-		BackgroundColor3 = accent and C.ACCENT_DIM or C.BG_INPUT,
-		BorderColor3 = accent and C.ACCENT or C.BORDER,
-		Size = UDim2.new(1, 0, 0, 32), AutoButtonColor = false,
+		TextColor3 = accent and C.BG_ROOT or C.TEXT_1,
+		BackgroundColor3 = baseColor, BorderSizePixel = 0,
+		Size = UDim2.new(1, 0, 0, 38), AutoButtonColor = false,
 		LayoutOrder = order or 0,
 	})
-	make("UICorner", { CornerRadius = UDim.new(0, 4) }, b)
+	make("UICorner", { CornerRadius = UDim.new(0, 8) }, b)
+	make("UIStroke", {
+		Color = accent and C.ACCENT_DIM or C.BORDER,
+		Thickness = 1, Transparency = accent and 1 or 0,
+	}, b)
+	b.MouseEnter:Connect(function() b.BackgroundColor3 = hoverColor end)
+	b.MouseLeave:Connect(function() b.BackgroundColor3 = baseColor end)
 	return b
 end
 
 local backendLabel = connLabel("Backend URL")
-backendLabel.LayoutOrder = 1
+backendLabel.LayoutOrder = 3
 backendLabel.Parent = connCard
-local urlBox = connInput(DEFAULT_BACKEND_URL, 2)
+local urlBox = connInput(DEFAULT_BACKEND_URL, 4)
 urlBox.Text = backendUrl
 urlBox.Parent = connCard
 
 local pairingLabel = connLabel("Pairing code (from website)")
-pairingLabel.LayoutOrder = 3
+pairingLabel.LayoutOrder = 5
 pairingLabel.Parent = connCard
-local codeBox = connInput("123456", 4)
+local codeBox = connInput("123456", 6)
+codeBox.Font = Enum.Font.RobotoMono
+codeBox.TextSize = 15
+codeBox.TextXAlignment = Enum.TextXAlignment.Center
 codeBox.Parent = connCard
-local linkBtn = connBtn("Link this place", 5, true)
+local linkBtn = connBtn("Link this place", 7, true)
 linkBtn.Parent = connCard
-local unlinkBtn = connBtn("Unlink", 6, false)
+local unlinkBtn = connBtn("Unlink Studio", 8, false)
 unlinkBtn.Parent = connCard
 
 -- Chat card
-local chatCard = card({ Order = 3, Pad = 10, List = 6 })
+local chatCard = card({ Order = 3, Pad = 12, List = 7 })
 chatCard.Parent = root
 
 make("TextLabel", {
-	Text = "Chat", Font = Enum.Font.GothamBold, TextSize = 13,
+	Text = "BUILD CHAT", Font = Enum.Font.GothamBold, TextSize = 10,
 	TextColor3 = C.TEXT_2, TextXAlignment = Enum.TextXAlignment.Left,
-	BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 18),
+	BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 14),
 	LayoutOrder = 1,
+}, chatCard)
+make("TextLabel", {
+	Text = "Ask Spider to build, edit, or inspect your open place.",
+	Font = Enum.Font.Gotham, TextSize = 10.5,
+	TextColor3 = C.TEXT_3, TextXAlignment = Enum.TextXAlignment.Left,
+	TextWrapped = true, BackgroundTransparency = 1,
+	Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 2,
 }, chatCard)
 
 local logScroll = make("ScrollingFrame", {
-	Size = UDim2.new(1, 0, 0, 200), BackgroundColor3 = C.BG_INPUT,
-	BorderColor3 = C.BORDER, CanvasSize = UDim2.new(),
+	Size = UDim2.new(1, 0, 0, 180), BackgroundColor3 = C.BG_INPUT,
+	BorderSizePixel = 0, CanvasSize = UDim2.new(),
 	AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarThickness = 5,
-	LayoutOrder = 2,
+	ScrollBarImageColor3 = C.BORDER_H, LayoutOrder = 3,
 }, chatCard)
-make("UICorner", { CornerRadius = UDim.new(0, 4) }, logScroll)
+make("UICorner", { CornerRadius = UDim.new(0, 8) }, logScroll)
+make("UIStroke", { Color = C.BORDER, Thickness = 1, Transparency = 0 }, logScroll)
 make("UIPadding", { PaddingTop = UDim.new(0,6), PaddingBottom = UDim.new(0,6),
 	PaddingLeft = UDim.new(0,8), PaddingRight = UDim.new(0,8) }, logScroll)
 make("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, logScroll)
 
-local chatBox = connInput("Ask the AI to build something...", 3)
+local chatBox = connInput("Describe what to build...", 4)
 chatBox.Parent = chatCard
-chatBox.LayoutOrder = 3
-local sendBtn = connBtn("Send", 4, true)
+chatBox.LayoutOrder = 4
+local sendBtn = connBtn("Send to Spider", 5, true)
 sendBtn.Parent = chatCard
 
 -- ===========================================================================
@@ -1016,6 +1084,8 @@ end
 -- ===========================================================================
 -- Polling
 -- ===========================================================================
+local refreshLinkedUI
+
 local function startPolling()
 	if polling then return end
 	polling = true
@@ -1029,11 +1099,13 @@ local function startPolling()
 				pcall(pushContext)
 				tick = 0
 			elseif err == "invalid plugin token" then
-				setStatus("Link expired. Re-link.", C.DANGER)
-				setStatusDot(C.DANGER)
 				pluginToken = nil
-				plugin:SetSetting(SETTINGS_TOKEN, nil)
+				linkVerified = false
+				clearSavedToken()
 				polling = false
+				refreshLinkedUI()
+				setStatus("Link expired. Paste a new code.", C.DANGER)
+				setStatusDot(C.DANGER)
 				break
 			end
 			tick += 1
@@ -1044,7 +1116,7 @@ local function startPolling()
 	end)
 end
 
-local function refreshLinkedUI()
+refreshLinkedUI = function()
 	if pluginToken and linkVerified then
 		setStatus("Linked — listening for actions...", C.SUCCESS)
 		setStatusDot(C.SUCCESS)
@@ -1084,9 +1156,10 @@ local function verifyStoredLink()
 		-- 401 / unknown link / server cold-started: the stored token is dead.
 		linkVerified = false
 		pluginToken = nil
-		plugin:SetSetting(SETTINGS_TOKEN, nil)
+		clearSavedToken()
 		instanceCodeByPath = {}
 		instancePathByCode = {}
+		refreshLinkedUI()
 		setStatus("Link expired — paste a new code.", C.DANGER)
 		setStatusDot(C.DANGER)
 	end
@@ -1130,15 +1203,20 @@ linkBtn.MouseButton1Click:Connect(function()
 end)
 
 unlinkBtn.MouseButton1Click:Connect(function()
+	local _, serverError = request("POST", "/api/link/unlink")
 	pluginToken = nil
 	linkVerified = false
 	polling = false
-	plugin:SetSetting(SETTINGS_TOKEN, nil)
+	clearSavedToken()
 	-- Clear code tables so old codes don't persist across re-links
 	instanceCodeByPath = {}
 	instancePathByCode = {}
-	setStatus("Unlinked.", C.TEXT_2)
-	setStatusDot(C.TEXT_3)
+	refreshLinkedUI()
+	if serverError then
+		logMessage("Unlinked locally. Server said: " .. tostring(serverError), "system", C.WARN)
+	else
+		logMessage("Studio unlinked from Spider.", "system", C.TEXT_3)
+	end
 end)
 
 -- ===========================================================================
