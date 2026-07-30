@@ -308,6 +308,64 @@ a { color: inherit; text-decoration: none; }
 }
 .hint { margin: 4px 0 12px; font-size: 12px; line-height: 1.55; color: var(--text-3); }
 
+.plugin-download {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px;
+  color: var(--text-2);
+  background: linear-gradient(135deg, rgba(103,232,249,.09), rgba(103,232,249,.025));
+  border: 1px solid var(--border-accent-dim);
+  border-radius: var(--r-md);
+  transition: transform var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.sidebar > .plugin-download { margin: 0; }
+.plugin-download:hover {
+  color: var(--text-1);
+  background: linear-gradient(135deg, rgba(103,232,249,.14), rgba(103,232,249,.045));
+  border-color: var(--border-accent);
+  transform: translateY(-1px);
+}
+.plugin-download-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  color: #001318;
+  background: var(--grad-accent);
+  border-radius: 9px;
+  box-shadow: 0 5px 14px rgba(8,145,178,.24);
+}
+.plugin-download > span:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+.plugin-download b,
+.plugin-download small {
+  display: block;
+}
+.plugin-download b {
+  color: var(--text-1);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.plugin-download small {
+  margin-top: 1px;
+  color: var(--text-3);
+  font-size: 10px;
+}
+.plugin-download-arrow {
+  color: var(--text-4);
+  font-size: 12px;
+  transition: color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+.plugin-download:hover .plugin-download-arrow {
+  color: var(--accent);
+  transform: translate(1px, -1px);
+}
+
 /* Inputs */
 .field {
   display: block; margin: 12px 0 0;

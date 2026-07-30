@@ -1,6 +1,7 @@
 --!nonstrict
 -- Spider AI — Roblox Studio plugin
 -- Links to the Spider website and lets the AI build in your game.
+-- Version 2.0.0 — Railway model gateway + production-ready defaults.
 --
 -- Install: put this file in your Studio Plugins folder
 --   (Studio: right-click in the Explorer's Plugins, or use the menu
@@ -12,11 +13,20 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 local InsertService = game:GetService("InsertService")
 
-local SETTINGS_URL = "FreeModel_BackendUrl"
-local SETTINGS_TOKEN = "FreeModel_PluginToken"
+local PLUGIN_VERSION = "2.0.0"
+local DEFAULT_BACKEND_URL = "https://spider-web-ju2g.onrender.com"
+local SETTINGS_URL = "Spider_BackendUrl"
+local SETTINGS_TOKEN = "Spider_PluginToken"
+local LEGACY_SETTINGS_URL = "FreeModel_BackendUrl"
+local LEGACY_SETTINGS_TOKEN = "FreeModel_PluginToken"
 
-local backendUrl = (plugin:GetSetting(SETTINGS_URL) or "http://localhost:3000"):gsub("/+$", "")
-local pluginToken = plugin:GetSetting(SETTINGS_TOKEN)
+-- Preserve existing links when upgrading from the legacy plugin.
+local backendUrl = (
+	plugin:GetSetting(SETTINGS_URL)
+	or plugin:GetSetting(LEGACY_SETTINGS_URL)
+	or DEFAULT_BACKEND_URL
+):gsub("/+$", "")
+local pluginToken = plugin:GetSetting(SETTINGS_TOKEN) or plugin:GetSetting(LEGACY_SETTINGS_TOKEN)
 local polling = false
 local linkVerified = false -- true only after /api/link/verify returns ok
 
@@ -110,7 +120,7 @@ local headerCard = card({ Order = 1, Pad = 10, List = 2 })
 headerCard.Parent = root
 
 make("TextLabel", {
-	Text = "Spider AI", Font = Enum.Font.GothamBold, TextSize = 18,
+	Text = "Spider AI  ·  v" .. PLUGIN_VERSION, Font = Enum.Font.GothamBold, TextSize = 18,
 	TextColor3 = C.TEXT_1, TextXAlignment = Enum.TextXAlignment.Left,
 	BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 22),
 	LayoutOrder = 1,
@@ -193,7 +203,7 @@ local function connBtn(text, order, accent)
 end
 
 connLabel("Backend URL")
-local urlBox = connInput("http://localhost:3000", 2)
+local urlBox = connInput(DEFAULT_BACKEND_URL, 2)
 urlBox.Text = backendUrl
 
 connLabel("Pairing code (from website)")

@@ -68,7 +68,8 @@ short intro explaining the flow; you can reopen it anytime with the **?** button
 ## 3. Install & link the Roblox plugin
 
 1. In Roblox Studio: **Plugins ▸ Plugins Folder**.
-2. Copy `plugin/FreeModelAI.server.lua` into that folder.
+2. Click **Download Studio plugin** on the Spider website and copy the
+   downloaded `SpiderAI.server.lua` into that folder.
 3. Back in Studio, click **Plugins ▸ FreeModel AI** (or restart Studio). A panel
    docks on the right.
 4. Confirm the **Backend URL** matches your server (`http://localhost:3000`).
@@ -229,7 +230,7 @@ server/
 public/
   index.html, style.css, app.js   The website UI
 plugin/
-  FreeModelAI.server.lua           The Studio plugin
+  FreeModelAI.server.lua           Canonical Studio plugin source
 data/
   users.json   Auto-created; per-user credits (gitignored)
 ```

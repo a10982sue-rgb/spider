@@ -638,6 +638,13 @@ app.post("/api/plugin/chat", async (req, res) => {
 });
 
 // === STATIC SITE ===========================================================
+// Always download the plugin directly from the canonical source file so the
+// website cannot drift behind the version shipped in this repository.
+app.get("/download/plugin", (_req, res) => {
+  const pluginPath = path.join(__dirname, "..", "plugin", "FreeModelAI.server.lua");
+  res.download(pluginPath, "SpiderAI.server.lua");
+});
+
 // allow dotfiles so /.well-known/security.txt is served (trust signal).
 app.use(express.static(path.join(__dirname, "..", "public"), { dotfiles: "allow" }));
 
