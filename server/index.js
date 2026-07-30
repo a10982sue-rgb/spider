@@ -6,8 +6,7 @@ import {
   confirmLink, queueActions, drainQueue, setContext, appendContextNote,
 } from "./store.js";
 import {
-  runChat, runChatKiro, runChatCustom,
-  isKiroModel, isCustomModel, isModelGated, modelCost, streamOnce,
+  runChat, isAvailableModel, isModelGated, modelCost, streamOnce,
   listAvailableModels,
 } from "./ai.js";
 import {
@@ -25,7 +24,6 @@ import {
 } from "./convos.js";
 import {
   ready as settingsReady, resolveKey, setApiKey, listApiKeyNames,
-  listModels as listCustomModels, addModel, removeModel,
   listChangelog, addChangelog, removeChangelog,
 } from "./settings.js";
 
@@ -188,11 +186,13 @@ app.post("/api/session/config", (req, res) => {
   if (!link) return;
   const user = currentUser(req);
   const { model } = req.body || {};
-  // Default API key for all users — resolved at request time so admins can
-  // rotate it from the admin panel without a redeploy.
-  link.apiKey = resolveKey("DEFAULT_API_KEY", "fe_oa_48604b790ac5e4f74ac0877a184737d54192da7c78427c0a");
+  // Gateway key is server-side only and can be rotated without changing the UI.
+  link.apiKey = resolveKey("QWEN_API_KEY", "");
   if (typeof model === "string" && model.trim()) {
     const requested = model.trim();
+    if (!isAvailableModel(requested)) {
+      return res.status(400).json({ error: `Unknown model '${requested}'.` });
+    }
     // Block gated models unless the user has the tester role.
     if (isModelGated(requested)) {
       const roles = user ? effectiveRoles(user) : { tester: false, admin: false };
@@ -297,7 +297,7 @@ app.post("/api/chat", async (req, res) => {
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
   // Abort propagation: if the browser closes the SSE connection before we've
-  // finished writing, we abort the upstream FreeModel fetch so it stops
+  // finished writing, we abort the upstream model fetch so it stops
   // burning tokens. Subscribe only to `res` (not `req`) — req.close can fire
   // unrelated to client disconnect after Express finishes reading the body.
   // `res.writableEnded` lets us distinguish "client closed early" from "we
@@ -355,12 +355,7 @@ app.post("/api/chat", async (req, res) => {
   };
 
   try {
-    const chatFn = isCustomModel(link.model)
-      ? runChatCustom
-      : isKiroModel(link.model)
-        ? runChatKiro
-        : runChat;
-    const { thinking, reply, actions, plan, truncated, salvaged } = await chatFn({
+    const { thinking, reply, actions, plan, truncated, salvaged } = await runChat({
       apiKey: link.apiKey,
       model: link.model,
       history,
@@ -510,16 +505,9 @@ app.post("/api/context", (req, res) => {
 
 // === MODEL CATALOG / CHANGELOG / ADMIN =====================================
 
-// What models can THIS user pick? Adds gated models if they're a tester and
-// merges in custom admin-registered models (with `hidden` filtered).
-app.get("/api/models", async (req, res) => {
-  const user = currentUser(req);
-  const roles = user ? effectiveRoles(user) : { tester: false, admin: false };
-  const builtins = listAvailableModels(roles);
-  const customs = listCustomModels()
-    .filter((m) => !m.hidden && (!m.gated || roles.tester))
-    .map((m) => ({ id: m.id, label: m.label, family: m.family, cost: m.cost, gated: !!m.gated }));
-  res.json({ models: [...builtins, ...customs] });
+// The only models Spider exposes. IDs map directly to the Railway gateway.
+app.get("/api/models", async (_req, res) => {
+  res.json({ models: listAvailableModels() });
 });
 
 // Public-readable changelog for the UI's "What's new" panel.
@@ -548,33 +536,15 @@ function requireAdmin(req, res, next) {
 // Admin: list / set / delete API keys (rotated at runtime, no redeploy).
 app.get("/api/admin/keys", requireAdmin, (req, res) => {
   // Return only the names — never the values.
-  const env = ["DEFAULT_API_KEY", "KIRO_API_KEY"];
+  const env = ["QWEN_API_KEY"];
   const overridden = listApiKeyNames();
-  const merged = Array.from(new Set([...env, ...overridden]));
-  res.json({ keys: merged.map((name) => ({ name, overridden: overridden.includes(name) })) });
+  res.json({ keys: env.map((name) => ({ name, overridden: overridden.includes(name) })) });
 });
 
 app.post("/api/admin/keys", requireAdmin, (req, res) => {
   const { name, value } = req.body || {};
   if (!name || typeof name !== "string") return res.status(400).json({ error: "name required" });
   setApiKey(name, typeof value === "string" ? value : "");
-  res.json({ ok: true });
-});
-
-// Admin: custom model registry.
-app.get("/api/admin/models", requireAdmin, (req, res) => {
-  res.json({ models: listCustomModels() });
-});
-app.post("/api/admin/models", requireAdmin, (req, res) => {
-  try {
-    const created = addModel(req.body || {});
-    res.json({ ok: true, model: created });
-  } catch (e) {
-    res.status(400).json({ error: String(e.message || e) });
-  }
-});
-app.delete("/api/admin/models/:id", requireAdmin, (req, res) => {
-  removeModel(req.params.id);
   res.json({ ok: true });
 });
 
@@ -645,12 +615,7 @@ app.post("/api/plugin/chat", async (req, res) => {
   link.history = history;
 
   try {
-    const chatFn = isCustomModel(link.model)
-      ? runChatCustom
-      : isKiroModel(link.model)
-        ? runChatKiro
-        : runChat;
-    const { thinking, reply, actions } = await chatFn({
+    const { thinking, reply, actions } = await runChat({
       apiKey: link.apiKey, model: link.model, history: link.history,
       context: link.context,
     });
@@ -680,7 +645,7 @@ const PORT = process.env.PORT || 3000;
 // Wait for the persistent stores (Redis or file) to load before serving.
 Promise.all([usersReady, convosReady, settingsReady]).then(() => {
   app.listen(PORT, () => {
-    console.log(`FreeModel-Roblox bridge running on http://localhost:${PORT}`);
+    console.log(`Spider bridge running on http://localhost:${PORT}`);
   });
   // Run the Discord bot in-process too, unless explicitly told to run it as a
   // separate service. This lets a single free Render web service host both the

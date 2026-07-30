@@ -1,30 +1,30 @@
-# FreeModel × Roblox
+# Spider × Roblox
 
 An AI builder for Roblox Studio. Chat on a website (or inside Studio) and a
-FreeModel-powered model (`gpt-5.5` / `gpt-5.4`) creates and edits things in
-your Roblox game in real time.
+model from Spider's Railway gateway creates and edits things in your Roblox
+game in real time.
 
 ```
 Browser (website)  ──►  Backend bridge (Node)  ◄──  Roblox Studio plugin
-   chat + API key         holds key, talks to            executes the AI's
-                          api.freemodel.dev               build actions
+   chat + model           holds key, talks to            executes the AI's
+                          Railway gateway                 build actions
 ```
 
 ## Why a backend?
 
 A Roblox Studio plugin can't receive inbound connections, and a browser can't
 talk to Studio directly. The small Node server in `server/` is the relay. It
-also holds your FreeModel API key so it never ships to the browser or plugin.
+also holds the gateway API key so it never ships to the browser or plugin.
 
 ## 1. Run the backend
 
 You need Node 18+ (for built-in `fetch`).
 
 ```bash
-cd freemodel-roblox
+cd spider
 npm install
 npm start
-# → FreeModel-Roblox bridge running on http://localhost:3000
+# → Spider bridge running on http://localhost:3000
 ```
 
 Optional environment variables:
@@ -32,15 +32,16 @@ Optional environment variables:
 | Var                       | Default                     | Purpose                                   |
 |---------------------------|-----------------------------|-------------------------------------------|
 | `PORT`                    | `3000`                      | Port for the site + API                   |
-| `FREEMODEL_BASE_URL`      | `https://api.freemodel.dev` | OpenAI-compatible endpoint base           |
-| `FREEMODEL_MAX_TOKENS`    | `16000`                     | Max output tokens per generation          |
-| `FREEMODEL_MAX_CONTINUATIONS` | `6`                     | How many times to auto-continue big builds|
+| `QWEN_API_KEY`            | —                           | Railway gateway key (required)             |
+| `QWEN_BASE_URL`           | Railway gateway URL         | OpenAI-compatible endpoint base            |
+| `AI_MAX_TOKENS`           | `16000`                     | Max output tokens per generation           |
+| `AI_MAX_CONTINUATIONS`    | `6`                         | How many times to auto-continue big builds |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | —           | Discord OAuth login (required for access) |
 | `DISCORD_REDIRECT_URI`    | `http://localhost:3000/auth/callback` | OAuth redirect back to the site  |
 | `SESSION_SECRET`          | (insecure dev default)      | Signs the login session cookie            |
 | `DISCORD_BOT_TOKEN` / `ADMIN_IDS` / `PUBLIC_URL` | —        | For the credit-management bot (`npm run bot`) |
 
-The server calls `POST {FREEMODEL_BASE_URL}/v1/chat/completions` — the same
+The server calls `POST {QWEN_BASE_URL}/v1/chat/completions` — the same
 shape ChatGPT SDK / Cursor / ChatBox use, so any OpenAI-ecosystem base URL works.
 
 ## Login & credits (Discord)
@@ -60,9 +61,8 @@ site shows a "login not configured" notice. Credits persist in `data/users.json`
 Go to <http://localhost:3000> and **log in with Discord**. First-time users see a
 short intro explaining the flow; you can reopen it anytime with the **?** button.
 
-1. **Enter your FreeModel API key** and pick a model (`gpt-5.5` or `gpt-5.4`),
-   then **Save key & start session**. (You bring your own key — get a free one
-   from FreeModel.) The key is stored only on your local bridge for the session.
+1. Pick one of Spider's configured models, then click **Start session**. The
+   shared gateway key stays on the server and is never sent to the browser.
 2. A **6-digit pairing code** appears in step 2.
 
 ## 3. Install & link the Roblox plugin
@@ -108,7 +108,7 @@ Click 📎 in the composer (or paste/drag an image) to attach references:
 Big requests can exceed a single response's token limit. The bridge handles this
 automatically: it sets a high `max_tokens`, and if the model still stops early
 (`finish_reason: "length"`) it **auto-continues** the generation and stitches the
-parts together (up to `FREEMODEL_MAX_CONTINUATIONS` times). You'll see a
+parts together (up to `AI_MAX_CONTINUATIONS` times). You'll see a
 "Generating more…" status while it works.
 
 If a response is still cut off or comes back malformed, the server **salvages**
@@ -186,7 +186,7 @@ answering (sent as OpenAI-style `reasoning_effort`):
 | X-High (best)   | xhigh      | 2×            | Whole games, the most demanding requests |
 
 Higher modes also widen the token budget so deeper reasoning has room to finish.
-Exact support depends on the FreeModel model; unknown levels fall back to medium.
+Exact support depends on the selected model; unknown levels fall back to medium.
 
 ### Watch the AI think
 
@@ -194,7 +194,7 @@ While the model works, a live **Thinking** panel streams its reasoning into the
 website chat (token by token, over Server-Sent Events). When the reply lands the
 panel collapses into a "💭 Thought process" line you can click to re-expand.
 
-This uses the gpt-5.x family's native reasoning tokens when FreeModel emits them
+This uses the model's native reasoning tokens when the gateway emits them
 (`reasoning` / `reasoning_content` stream deltas). For models that don't, the AI
 is also asked to include a `thinking` field in its JSON, which is shown instead.
 The in-Studio plugin chat logs the final thought process as a `💭` line (the
@@ -222,7 +222,7 @@ are `[x, y, z]` arrays; enum properties (e.g. `Material`) accept the name string
 server/
   index.js   Express app: sessions, pairing, chat, action queue
   store.js   In-memory link/session/queue store
-  ai.js      FreeModel call + JSON action parsing + system prompt
+  ai.js      Gateway call + JSON action parsing + system prompt
   auth.js    Discord OAuth login + signed session cookies
   users.js   Persistent per-user store (Discord identity + credits)
   bot.js     Discord bot: credit management + login-link onboarding

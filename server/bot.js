@@ -98,10 +98,9 @@ const commands = [
   new SlashCommandBuilder()
     .setName("setapikey")
     .setDescription("Set or rotate an API key at runtime (admins only)")
-    .addStringOption((o) => o.setName("name").setDescription("Key name (e.g. KIRO_API_KEY)").setRequired(true)
+    .addStringOption((o) => o.setName("name").setDescription("Gateway key name").setRequired(true)
       .addChoices(
-        { name: "DEFAULT_API_KEY (FreeModel)", value: "DEFAULT_API_KEY" },
-        { name: "KIRO_API_KEY", value: "KIRO_API_KEY" },
+        { name: "QWEN_API_KEY", value: "QWEN_API_KEY" },
       ))
     .addStringOption((o) => o.setName("value").setDescription("New value (leave blank to clear)").setRequired(false)),
   new SlashCommandBuilder()
@@ -251,7 +250,7 @@ function registerHandlers() {
         return i.reply({
           ephemeral: true,
           content:
-            "Click below to log in with Discord, then enter your FreeModel API key and " +
+            "Click below to log in with Discord, start a model session, and " +
             "link the Roblox Studio plugin. You start with " + STARTING_CREDITS + " credits.",
           components: [loginRow()],
         });
@@ -394,7 +393,7 @@ function registerHandlers() {
       content:
         "👋 Welcome to **Spider** — AI that builds your Roblox game.\n\n" +
         "1. Log in with Discord below\n" +
-        "2. Paste your FreeModel API key\n" +
+        "2. Start a model session\n" +
         "3. Link the Studio plugin with the 6-digit code\n" +
         "4. Describe what you want built — you get " + STARTING_CREDITS + " generations.",
       components: [loginRow()],

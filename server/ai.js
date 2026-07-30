@@ -1,13 +1,11 @@
-// Talks to FreeModel's OpenAI-compatible endpoint and coerces the model's
+// Talks to Spider's OpenAI-compatible Railway gateway and coerces the model's
 // output into { reply, actions[] } that the Roblox plugin understands.
 // Handles large builds (auto-continuation across length limits), truncated-JSON
 // salvage, and image/file attachments (vision).
 
-import { resolveKey, getModel as getCustomModel } from "./settings.js";
-
-const BASE_URL = process.env.FREEMODEL_BASE_URL || "https://api.freemodel.dev";
-const MAX_TOKENS = Number(process.env.FREEMODEL_MAX_TOKENS || 16000);
-const MAX_CONTINUATIONS = Number(process.env.FREEMODEL_MAX_CONTINUATIONS || 6);
+const BASE_URL = (process.env.QWEN_BASE_URL || "https://qwen38-api-production.up.railway.app").replace(/\/+$/, "");
+const MAX_TOKENS = Number(process.env.AI_MAX_TOKENS || 16000);
+const MAX_CONTINUATIONS = Number(process.env.AI_MAX_CONTINUATIONS || 6);
 
 // Thinking-effort presets. `effort` is sent as OpenAI-style reasoning_effort;
 // tokenScale widens the output budget so heavier reasoning has room to finish.
@@ -743,9 +741,15 @@ function salvageJson(text) {
 // Fires onReason(chunk) for each native reasoning delta.
 // `signal` (optional AbortSignal) cancels the in-flight fetch + stream so we
 // stop burning tokens the moment the client clicks Stop.
-// `baseUrl` (optional) overrides the FreeModel URL for OpenAI-compatible
-// upstreams (e.g. Lightning). `withReasoning` controls whether the
-// reasoning_effort field is sent — some upstreams reject unknown fields.
+// `baseUrl` (optional) overrides the configured OpenAI-compatible gateway.
+// Only the GPT-5.6 routes receive reasoning_effort; the Claude/Fable/Qwen
+// routes on this gateway reject or ignore that OpenAI-specific field.
+const REASONING_MODELS = new Set([
+  "openai/gpt-5.6-luna",
+  "gpt-5-6-sol",
+  "gpt-5-6-terra",
+]);
+
 export async function streamOnce({ apiKey, model, messages, onReason, think, signal, baseUrl, withReasoning = true }) {
   const mode = THINK_MODES[think] || THINK_MODES.medium;
   const body = {
@@ -756,7 +760,9 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
     stream: true,
   };
   // Off = no reasoning at all; otherwise request the effort level.
-  if (withReasoning && think !== "off") body.reasoning_effort = mode.effort;
+  if (withReasoning && REASONING_MODELS.has(model) && think !== "off") {
+    body.reasoning_effort = mode.effort;
+  }
 
   const url = baseUrl
     ? `${baseUrl.replace(/\/+$/, "")}/chat/completions`
@@ -777,13 +783,10 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    let tag = "FreeModel";
+    let tag = "Upstream";
     if (baseUrl) {
       if (baseUrl.includes("xn--vduyey89e") || baseUrl.includes("kiro")) tag = "Kiro";
-      else tag = "Upstream";
     }
-    // 402 with a "freemodel" body coming from kiro/lightning would be misleading;
-    // prefix the response tag so the UI shows the real upstream that ran out.
     throw new Error(`${tag} ${res.status}: ${detail.slice(0, 500)}`);
   }
 
@@ -987,101 +990,29 @@ function sanitizePlan(p) {
   return { title, summary, steps, ideas };
 }
 
-// Credit cost per successful generation, keyed by the model id the UI sends.
-// Unknown ids fall through to the default (100). Custom admin-registered
-// models declare their own cost in settings.json and win over this table.
-const MODEL_COSTS = {
-  "gpt-5.4": 100,
-  "gpt-5.5": 150,
-  "gpt-5.6": 200,
-  "opus-4.8": 500,
-  "kiro-high": 500,
-  "kiro-low": 500,
-  "kiro-max-cc": 500,
-  "kiro-special": 500,
-};
+// This is the complete model catalog. IDs match the Railway gateway exactly.
+const AVAILABLE_MODELS = [
+  { id: "gpt-5-6-sol", label: "GPT-5.6 Sol (recommended) — 100 credits", family: "openai", cost: 100, gated: false },
+  { id: "gpt-5-6-terra", label: "GPT-5.6 Terra — 100 credits", family: "openai", cost: 100, gated: false },
+  { id: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna — 100 credits", family: "openai", cost: 100, gated: false },
+  { id: "claude-opus-5", label: "Claude Opus 5 — 100 credits", family: "anthropic", cost: 100, gated: false },
+  { id: "fable-5", label: "Fable 5 — 100 credits", family: "anthropic", cost: 100, gated: false },
+  { id: "qwen3.8-max-preview", label: "Qwen 3.8 Max Preview — 100 credits", family: "qwen", cost: 100, gated: false },
+];
+const AVAILABLE_MODEL_IDS = new Set(AVAILABLE_MODELS.map((model) => model.id));
+
 export function modelCost(id) {
-  const custom = getCustomModel(id);
-  if (custom && custom.cost) return custom.cost;
-  return MODEL_COSTS[id] ?? 100;
+  return AVAILABLE_MODEL_IDS.has(id) ? 100 : 100;
 }
 
-// Models gated behind the tester role. Regular users can't pick these.
-const GATED_MODELS = new Set(["gpt-5.5", "gpt-5.6"]);
-export function isModelGated(id) {
-  const custom = getCustomModel(id);
-  if (custom) return !!custom.gated;
-  return GATED_MODELS.has(id);
+export function isModelGated() {
+  return false;
 }
 
-// Catalog of UI-visible base models. Custom entries from settings merge on top.
-export function listAvailableModels(roles = {}) {
-  const tester = !!roles.tester;
-  const base = [
-    { id: "gpt-5.4", label: "gpt-5.4 (recommended) — 100 credits", family: "openai", cost: 100, gated: false },
-    { id: "gpt-5.5", label: "gpt-5.5 (tester) — 150 credits", family: "openai", cost: 150, gated: true },
-    { id: "gpt-5.6", label: "gpt-5.6 (tester) — 200 credits", family: "openai", cost: 200, gated: true },
-    { id: "opus-4.8", label: "Opus 4.8 (Kiro) — 500 credits", family: "anthropic", cost: 500, gated: false },
-    { id: "kiro-high", label: "Opus 4.8 — high cache — 500", family: "anthropic", cost: 500, gated: false },
-    { id: "kiro-low", label: "Opus 4.8 — low cache — 500", family: "anthropic", cost: 500, gated: false },
-    { id: "kiro-max-cc", label: "Opus 4.8 — MAX-CC — 500", family: "anthropic", cost: 500, gated: false },
-    { id: "kiro-special", label: "Opus 4.8 — special — 500", family: "anthropic", cost: 500, gated: false },
-  ];
-  return base.filter((m) => tester || !m.gated);
+export function isAvailableModel(id) {
+  return AVAILABLE_MODEL_IDS.has(id);
 }
 
-// === KIRO (xn--vduyey89e.com) ==============================================
-// OpenAI-compatible endpoint that exposes claude-opus-4-8 under four routing
-// tags. Same wire protocol as FreeModel/Lightning, so we delegate to runChat
-// with the upstream and key overridden. reasoning_effort is suppressed —
-// Anthropic models on this gateway reject the field.
-
-const KIRO_BASE_URL = (process.env.KIRO_BASE_URL || "https://xn--vduyey89e.com").replace(/\/+$/, "");
-const KIRO_DEFAULT_KEY = "sk-oQNftENsrc1Ccym8ixlAsDC0wcHCkeeBlHqCi7VnZZS6jfX0";
-
-const KIRO_MODELS = {
-  "opus-4.8":     "[kiro量高缓]claude-opus-4-8",
-  "kiro-high":    "[kiro量高缓]claude-opus-4-8",
-  "kiro-low":     "[kiro量低缓]claude-opus-4-8",
-  "kiro-max-cc":  "[MAX-CC]claude-opus-4-8",
-  "kiro-special": "[特特价次kiro]claude-opus-4-8",
-};
-
-export function isKiroModel(id) {
-  return typeof id === "string" && Object.prototype.hasOwnProperty.call(KIRO_MODELS, id);
-}
-
-export async function runChatKiro(opts) {
-  const apiKey = resolveKey("KIRO_API_KEY", KIRO_DEFAULT_KEY);
-  const upstreamModel = KIRO_MODELS[opts.model] || KIRO_MODELS["kiro-high"];
-  // Kiro's path is `/v1/chat/completions`; runChat appends `/chat/completions`
-  // to the supplied baseUrl, so pass the `/v1` prefix here.
-  return runChat({
-    ...opts,
-    apiKey,
-    model: upstreamModel,
-    baseUrl: `${KIRO_BASE_URL}/v1`,
-    withReasoning: false,
-  });
-}
-
-// === CUSTOM (admin-registered) =============================================
-// Any model added via the admin panel routes here. Each entry declares its own
-// upstream model id, base URL, and the env-var name holding the key.
-export function isCustomModel(id) {
-  return !!getCustomModel(id);
-}
-
-export async function runChatCustom(opts) {
-  const def = getCustomModel(opts.model);
-  if (!def) throw new Error(`Unknown custom model: ${opts.model}`);
-  const apiKey = resolveKey(def.keyName || "DEFAULT_API_KEY", "");
-  if (!apiKey) throw new Error(`API key '${def.keyName}' not set for model ${opts.model}`);
-  return runChat({
-    ...opts,
-    apiKey,
-    model: def.upstream,
-    baseUrl: def.baseUrl,
-    withReasoning: def.withReasoning !== false,
-  });
+export function listAvailableModels() {
+  return AVAILABLE_MODELS.map((model) => ({ ...model }));
 }

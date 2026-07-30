@@ -16,8 +16,7 @@ const redisEnabled = !!(REDIS_URL && REDIS_TOKEN);
 const REDIS_KEY = "spider:settings";
 
 const DEFAULT_STATE = {
-  apiKeys: {},        // name -> string (e.g. KIRO_API_KEY, LIGHTNING_API_KEY, DEFAULT_API_KEY)
-  models: [],         // [{ id, label, family, upstream, baseUrl, cost, gated, hidden }]
+  apiKeys: {},        // name -> string (QWEN_API_KEY)
   changelog: [],      // [{ id, at, title, body, scope, author }]
 };
 
@@ -92,41 +91,6 @@ export function setApiKey(envName, value) {
 }
 export function listApiKeyNames() {
   return Object.keys(state.apiKeys || {});
-}
-
-// --- Custom models ---------------------------------------------------------
-// Admin can register additional models that the UI dropdown picks up alongside
-// the built-ins. Saved with a stable id so the chat handler can route by id.
-export function listModels() {
-  return [...(state.models || [])];
-}
-export function getModel(id) {
-  if (!id) return null;
-  return (state.models || []).find((m) => m.id === id) || null;
-}
-export function addModel(def) {
-  const id = String(def.id || "").trim();
-  if (!id) throw new Error("model id required");
-  if (!def.upstream || !def.baseUrl) throw new Error("upstream and baseUrl required");
-  state.models = (state.models || []).filter((m) => m.id !== id);
-  state.models.push({
-    id,
-    label: String(def.label || id),
-    family: String(def.family || "custom"),
-    upstream: String(def.upstream),
-    baseUrl: String(def.baseUrl),
-    keyName: String(def.keyName || "DEFAULT_API_KEY"),
-    cost: Math.max(1, Math.floor(Number(def.cost) || 100)),
-    gated: !!def.gated,
-    hidden: !!def.hidden,
-    withReasoning: def.withReasoning !== false,
-  });
-  persist();
-  return getModel(id);
-}
-export function removeModel(id) {
-  state.models = (state.models || []).filter((m) => m.id !== id);
-  persist();
 }
 
 // --- Changelog -------------------------------------------------------------

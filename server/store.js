@@ -21,8 +21,8 @@ export function createLink() {
     ownerId: null,         // Discord user id that owns this session (credits)
     roblox: null,          // { userId, userName, placeId }
     pluginToken: null,
-    apiKey: null,          // per-link FreeModel key (entered on website)
-    model: "gpt-5.5",
+    apiKey: null,          // server-side gateway key, assigned when session starts
+    model: "gpt-5-6-sol",
     history: [],           // chat messages for the AI
     queue: [],             // pending actions for the plugin
     results: [],           // results reported back by the plugin

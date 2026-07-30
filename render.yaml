@@ -24,6 +24,11 @@ services:
         generateValue: true  # Render generates a strong secret for you
       - key: PUBLIC_URL
         sync: false          # set to https://<your-render-url>
+      # OpenAI-compatible Railway gateway used by every model.
+      - key: QWEN_BASE_URL
+        value: https://qwen38-api-production.up.railway.app
+      - key: QWEN_API_KEY
+        sync: false
       # Discord bot — runs inside this web service (see startBot in index.js).
       # Can be a SEPARATE Discord app from login; just set its token here.
       - key: DISCORD_BOT_TOKEN
