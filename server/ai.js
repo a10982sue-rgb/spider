@@ -1294,7 +1294,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   }
 
   const reply = typeof parsed.reply === "string" ? parsed.reply : "";
-  const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
+  const actions = normalizeActions(parsed.actions);
   const plan = sanitizePlan(parsed.plan);
   const thinking = typeof parsed.thinking === "string"
     ? parsed.thinking
@@ -1310,6 +1310,79 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
     truncated: r.finishReason === "length",
     actualModel,
   };
+}
+
+// Models occasionally omit a destination or use `path` where the plugin action
+// schema expects `parent`. Repair safe omissions here so malformed actions
+// never reach Studio. Actions that cannot be repaired unambiguously are dropped.
+export function normalizeActions(actions) {
+  if (!Array.isArray(actions)) return [];
+  const text = (value) => typeof value === "string" ? value.trim() : "";
+  const hasTarget = (action, key) => !!(text(action.targetCode) || text(action[key]));
+  const createParent = (action, fallback) => {
+    if (text(action.parent)) return text(action.parent);
+    const path = text(action.path);
+    const name = text(action.name);
+    if (path) {
+      const suffix = name ? `.${name}` : "";
+      return suffix && path.endsWith(suffix) ? path.slice(0, -suffix.length) : path;
+    }
+    return fallback;
+  };
+
+  return actions.map((action) => {
+    if (!action || typeof action !== "object" || Array.isArray(action)) return null;
+    const out = { ...action };
+    out.type = text(out.type);
+
+    switch (out.type) {
+      case "create_script": {
+        const aliases = { ServerScript: "Script", ClientScript: "LocalScript" };
+        out.scriptClass = aliases[text(out.scriptClass)] || text(out.scriptClass) || "Script";
+        if (!["Script", "LocalScript", "ModuleScript"].includes(out.scriptClass)) {
+          out.scriptClass = "Script";
+        }
+        if (typeof out.source !== "string") return null;
+        out.name = text(out.name) || "AIScript";
+        const fallback = out.scriptClass === "LocalScript"
+          ? "StarterPlayer.StarterPlayerScripts"
+          : out.scriptClass === "ModuleScript"
+            ? "ReplicatedStorage"
+            : "ServerScriptService";
+        out.parent = createParent(out, fallback);
+        return out;
+      }
+      case "create_instance":
+        out.className = text(out.className) || "Part";
+        out.name = text(out.name) || out.className;
+        out.parent = createParent(out, "Workspace");
+        out.properties = out.properties && typeof out.properties === "object" ? out.properties : {};
+        return out;
+      case "set_property":
+        out.path = text(out.path) || text(out.parent);
+        out.properties = out.properties && typeof out.properties === "object" ? out.properties : {};
+        return hasTarget(out, "path") ? out : null;
+      case "delete_instance":
+        out.path = text(out.path) || text(out.parent);
+        return hasTarget(out, "path") ? out : null;
+      case "edit_script":
+        out.path = text(out.path) || text(out.parent);
+        return hasTarget(out, "path") && typeof out.source === "string" ? out : null;
+      case "insert_free_model":
+      case "insert_free_audio":
+      case "insert_free_animation":
+        out.parent = createParent(out, "Workspace");
+        return out.assetId != null || text(out.query) ? out : null;
+      case "find_code":
+        out.name = text(out.name) || text(out.target);
+        return out.name ? out : null;
+      case "read_script":
+        out.path = text(out.path) || text(out.parent);
+        return hasTarget(out, "path") ? out : null;
+      default:
+        return null;
+    }
+  }).filter(Boolean);
 }
 
 // Coerce a model-emitted plan into a known shape. Returns null if the object

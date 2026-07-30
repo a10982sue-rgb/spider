@@ -1,7 +1,7 @@
 --!nonstrict
 -- Spider AI — Roblox Studio plugin
 -- Links to the Spider website and lets the AI build in your game.
--- Version 2.1.1 — faster place snapshots for lower response latency.
+-- Version 2.1.2 — repairs missing action destinations before execution.
 --
 -- Install: put this file in your Studio Plugins folder
 --   (Studio: right-click in the Explorer's Plugins, or use the menu
@@ -13,7 +13,7 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 local InsertService = game:GetService("InsertService")
 
-local PLUGIN_VERSION = "2.1.1"
+local PLUGIN_VERSION = "2.1.2"
 local DEFAULT_BACKEND_URL = "https://spider-web-ju2g.onrender.com"
 local SETTINGS_URL = "Spider_BackendUrl"
 local SETTINGS_TOKEN = "Spider_PluginToken"
@@ -955,10 +955,19 @@ local function executeAction(a)
 		return true, "deleted " .. (resolvedPath or a.path or "?")
 
 	elseif t == "create_script" then
-		local parent, parentPath, perr = resolveTarget({ targetCode = a.targetCode, parent = a.parent })
-		if not parent then return false, "create_script", perr end
 		local cls = a.scriptClass or "Script"
 		if cls ~= "Script" and cls ~= "LocalScript" and cls ~= "ModuleScript" then cls = "Script" end
+		local defaultParent = "ServerScriptService"
+		if cls == "LocalScript" then
+			defaultParent = "StarterPlayer.StarterPlayerScripts"
+		elseif cls == "ModuleScript" then
+			defaultParent = "ReplicatedStorage"
+		end
+		local parent, parentPath, perr = resolveTarget({
+			targetCode = a.targetCode,
+			parent = a.parent or a.path or defaultParent,
+		})
+		if not parent then return false, "create_script", perr end
 		local s = Instance.new(cls)
 		s.Name = a.name or "AIScript"
 		s.Source = a.source or ""
