@@ -243,7 +243,7 @@ $("modelBtn").addEventListener("click", () => {
 $("webSearchBtn").addEventListener("click", () => {
   state.webSearch = !state.webSearch;
   $("webSearchBtn").setAttribute("aria-pressed", state.webSearch ? "true" : "false");
-  flash(state.webSearch ? "Web search enabled" : "Web search disabled");
+  flash(state.webSearch ? "Live search tool enabled" : "Live search tool disabled");
   $("chatInput").focus();
 });
 
@@ -726,7 +726,7 @@ function addThinking() {
     finish(finalText) {
       if (finalText && !text) { text = finalText; body.textContent = finalText; }
       if (!text) { wrap.remove(); return; }
-      head.innerHTML = '💭 Thought process <span class="caret">▸</span>';
+      head.innerHTML = '💭 Activity &amp; reasoning <span class="caret">▸</span>';
       wrap.classList.add("done", "collapsed");
     },
     remove() { wrap.remove(); },

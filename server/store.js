@@ -22,7 +22,7 @@ export function createLink() {
     roblox: null,          // { userId, userName, placeId }
     pluginToken: null,
     apiKey: null,          // server-side gateway key, assigned when session starts
-    model: "gpt-5-6-sol",
+    model: "gpt-5-6-terra",
     history: [],           // chat messages for the AI
     queue: [],             // pending actions for the plugin
     results: [],           // results reported back by the plugin
@@ -93,7 +93,9 @@ export function drainQueue(link) {
 
 // Store the latest place snapshot the plugin captured. Capped so a huge place
 // can't blow up memory or the model's context window.
-const MAX_CONTEXT = 400_000; // chars
+// Keep enough live place context for real debugging without sending enormous
+// prompts that delay every generation.
+const MAX_CONTEXT = 240_000; // chars
 export function setContext(link, context) {
   const text = typeof context === "string" ? context : "";
   link.context = text.length > MAX_CONTEXT

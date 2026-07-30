@@ -182,22 +182,26 @@ answering (sent as OpenAI-style `reasoning_effort`):
 | Mode            | Effort     | Output budget | Use for                                  |
 |-----------------|------------|---------------|------------------------------------------|
 | Off             | minimal    | 1×            | Quick edits, simple chat                 |
-| Medium *(def.)* | medium     | 1×            | Everyday building                        |
+| Fast *(default)*| low        | 0.8×          | Quick edits and everyday building        |
+| Medium          | medium     | 1×            | Larger changes and debugging             |
 | Heavy           | high       | 1.5×          | Complex systems, multi-script logic      |
 | X-High (best)   | xhigh      | 2×            | Whole games, the most demanding requests |
 
 Higher modes also widen the token budget so deeper reasoning has room to finish.
-Exact support depends on the selected model; unknown levels fall back to medium.
+Exact support depends on the selected model; unknown levels fall back to Fast.
 
 ### Watch the AI think
 
-While the model works, a live **Thinking** panel streams its reasoning into the
-website chat (token by token, over Server-Sent Events). When the reply lands the
-panel collapses into a "💭 Thought process" line you can click to re-expand.
+While the model works, a live **Thinking** panel streams activity, tool use, and
+concise reasoning summaries into the website chat (over Server-Sent Events).
+When the reply lands the panel collapses into a "💭 Activity & reasoning" line
+you can click to re-expand.
 
 This uses the model's native reasoning tokens when the gateway emits them
 (`reasoning` / `reasoning_content` stream deltas). For models that don't, the AI
-is also asked to include a `thinking` field in its JSON, which is shown instead.
+is asked to include a concise `thinking` summary in its JSON, which is streamed
+instead. Enabling **Search** runs a real server-side web search and shows that
+tool activity in the same panel before the AI answers.
 The in-Studio plugin chat logs the final thought process as a `💭` line (the
 Roblox HTTP API can't stream, so it appears once when the reply arrives).
 

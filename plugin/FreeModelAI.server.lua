@@ -1,7 +1,7 @@
 --!nonstrict
 -- Spider AI — Roblox Studio plugin
 -- Links to the Spider website and lets the AI build in your game.
--- Version 2.1.0 — redesigned interface + reliable server-side unlink.
+-- Version 2.1.1 — faster place snapshots for lower response latency.
 --
 -- Install: put this file in your Studio Plugins folder
 --   (Studio: right-click in the Explorer's Plugins, or use the menu
@@ -13,7 +13,7 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 local InsertService = game:GetService("InsertService")
 
-local PLUGIN_VERSION = "2.1.0"
+local PLUGIN_VERSION = "2.1.1"
 local DEFAULT_BACKEND_URL = "https://spider-web-ju2g.onrender.com"
 local SETTINGS_URL = "Spider_BackendUrl"
 local SETTINGS_TOKEN = "Spider_PluginToken"
@@ -434,9 +434,9 @@ local SNAPSHOT_SERVICES = {
 	"StarterPlayer", "SoundService", "Teams",
 }
 
-local MAX_NODES = 1500
-local MAX_SCRIPT_CHARS = 12000
-local MAX_DEPTH = 12
+local MAX_NODES = 1200
+local MAX_SCRIPT_CHARS = 9000
+local MAX_DEPTH = 10
 
 local INDEX_CLASSES = {
 	Folder = true, Configuration = true, Model = true,

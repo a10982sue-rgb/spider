@@ -3,14 +3,17 @@
 // Handles large builds (auto-continuation across length limits), truncated-JSON
 // salvage, and image/file attachments (vision).
 
+import { formatSearchResults, searchWeb } from "./tools.js";
+
 const BASE_URL = (process.env.QWEN_BASE_URL || "https://qwen38-api-production.up.railway.app").replace(/\/+$/, "");
-const MAX_TOKENS = Number(process.env.AI_MAX_TOKENS || 16000);
+const MAX_TOKENS = Number(process.env.AI_MAX_TOKENS || 12000);
 const MAX_CONTINUATIONS = Number(process.env.AI_MAX_CONTINUATIONS || 6);
 
 // Thinking-effort presets. `effort` is sent as OpenAI-style reasoning_effort;
 // tokenScale widens the output budget so heavier reasoning has room to finish.
 const THINK_MODES = {
   off:    { effort: "minimal", tokenScale: 1 },
+  fast:   { effort: "low",     tokenScale: 0.8 },
   medium: { effort: "medium",  tokenScale: 1 },
   heavy:  { effort: "high",    tokenScale: 1.5 },
   xhigh:  { effort: "xhigh",   tokenScale: 2 },
@@ -41,7 +44,7 @@ or invent code that you can already see.
 
 You MUST reply with a single JSON object, no markdown fences, of the form:
 {
-  "thinking": "<your step-by-step reasoning: what the user wants, which instances you will create or change, and why>",
+  "thinking": "<concise work summary: what you understood, which tools or instances you are using, and the next action>",
   "reply": "<short message to show the user>",
   "plan": <optional plan object — see PLAN-FIRST FLOW below>,
   "actions": [ <zero or more action objects> ]
@@ -750,7 +753,72 @@ const REASONING_MODELS = new Set([
   "gpt-5-6-terra",
 ]);
 
-export async function streamOnce({ apiKey, model, messages, onReason, think, signal, baseUrl, withReasoning = true }) {
+// Streams a JSON string field while the model is still generating the object.
+// This lets models without native reasoning deltas show their `thinking` field
+// live instead of making the user wait for the entire response.
+function createJsonStringFieldStreamer(fieldName, onText) {
+  let search = "";
+  let started = false;
+  let ended = false;
+  let escaping = false;
+  let unicode = "";
+  const marker = new RegExp(`"${fieldName}"\\s*:\\s*"`);
+
+  return {
+    push(chunk) {
+      if (ended || !chunk) return;
+      let input = chunk;
+      if (!started) {
+        search += input;
+        const match = marker.exec(search);
+        if (!match) {
+          search = search.slice(-Math.max(80, fieldName.length + 24));
+          return;
+        }
+        started = true;
+        input = search.slice(match.index + match[0].length);
+        search = "";
+      }
+
+      let output = "";
+      for (const char of input) {
+        if (unicode) {
+          unicode += char;
+          if (unicode.length === 5) {
+            const point = Number.parseInt(unicode.slice(1), 16);
+            output += Number.isFinite(point) ? String.fromCodePoint(point) : "";
+            unicode = "";
+            escaping = false;
+          }
+          continue;
+        }
+        if (escaping) {
+          if (char === "u") {
+            unicode = "u";
+            continue;
+          }
+          const escaped = { '"': '"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t" };
+          output += escaped[char] ?? char;
+          escaping = false;
+          continue;
+        }
+        if (char === "\\") {
+          escaping = true;
+          continue;
+        }
+        if (char === '"') {
+          ended = true;
+          break;
+        }
+        output += char;
+      }
+      if (output && onText) onText(output);
+    },
+    get started() { return started; },
+  };
+}
+
+export async function streamOnce({ apiKey, model, messages, onReason, onContent, think, signal, baseUrl, withReasoning = true }) {
   const mode = THINK_MODES[think] || THINK_MODES.medium;
   const body = {
     model,
@@ -810,7 +878,10 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
       if (!actualModel && typeof json?.model === "string") actualModel = json.model;
       const choice = json?.choices?.[0] || {};
       const delta = choice.delta || {};
-      if (typeof delta.content === "string") content += delta.content;
+      if (typeof delta.content === "string") {
+        content += delta.content;
+        if (onContent) onContent(delta.content);
+      }
       const r = delta.reasoning_content ?? delta.reasoning;
       if (typeof r === "string" && r) { reasoning += r; if (onReason) onReason(r); }
       if (choice.finish_reason) finishReason = choice.finish_reason;
@@ -820,19 +891,50 @@ export async function streamOnce({ apiKey, model, messages, onReason, think, sig
 }
 
 export async function runChat({ apiKey, model, history, thinkMode, context, mode, webSearch, onThinking, onStatus, signal, baseUrl, withReasoning = true }) {
+  const emit = (txt) => {
+    if (txt && typeof onThinking === "function") {
+      try { onThinking(txt); } catch { /* ignore UI sink errors */ }
+    }
+  };
+  const status = (s) => {
+    if (typeof onStatus === "function") {
+      try { onStatus(s); } catch { /* ignore UI sink errors */ }
+    }
+  };
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
   ];
-  // Web search capability
+  emit("Reading your request and choosing the right tools…\n");
+
+  // Real server-side search tool. The previous Web toggle only told the model
+  // that search existed; this fetches results and gives them to the model.
   if (webSearch) {
-    messages.push({
-      role: "system",
-      content:
-        "WEB SEARCH ENABLED: You can search the web for current information when needed. " +
-        "If the user asks about recent events, current data, or anything requiring up-to-date " +
-        "information, mention in your 'thinking' that you would search for it. For Roblox-specific " +
-        "questions (APIs, best practices, asset IDs), web search can help find documentation and resources.",
-    });
+    const latest = [...history].reverse().find((item) => item?.role === "user");
+    const query = typeof latest?.content === "string"
+      ? latest.content
+      : Array.isArray(latest?.content)
+        ? latest.content.filter((part) => part?.type === "text").map((part) => part.text || "").join(" ")
+        : "";
+    if (query.trim()) {
+      status("Searching the web…");
+      emit("Using the live web search tool…\n");
+      try {
+        const results = await searchWeb(query, { limit: 5 });
+        messages.push({
+          role: "system",
+          content:
+            "WEB_SEARCH TOOL RESULT:\n" + formatSearchResults(results) +
+            "\n\nUse these results when relevant. Include the exact source URLs in your reply. " +
+            "Do not invent sources or claim a result says something absent from its snippet.",
+        });
+        status("Reading search results…");
+      } catch (error) {
+        messages.push({
+          role: "system",
+          content: `WEB_SEARCH TOOL ERROR: ${String(error?.message || error)}. Continue without web results.`,
+        });
+      }
+    }
   }
   // "Model" mode (the Model button): focus the build on one self-contained Model.
   if (mode === "model") {
@@ -884,6 +986,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   // Inject the live place snapshot (instance tree + script sources + selection)
   // so the model can read existing code and context before acting.
   if (typeof context === "string" && context.trim()) {
+    emit("Inspecting the live Studio place and selected objects…\n");
     messages.push({
       role: "system",
       content:
@@ -892,21 +995,30 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
     });
   }
   messages.push(...history);
-  const think = THINK_MODES[thinkMode] ? thinkMode : "medium";
-
-  const emit = (txt) => {
-    if (txt && typeof onThinking === "function") {
-      try { onThinking(txt); } catch { /* ignore UI sink errors */ }
-    }
-  };
-  const status = (s) => { if (typeof onStatus === "function") { try { onStatus(s); } catch {} } };
+  const think = THINK_MODES[thinkMode] ? thinkMode : "fast";
 
   let content = "";
   let reasoning = "";
   let actualModel = null;
+  let nativeReasoningSeen = false;
+  let streamedJsonThinking = false;
+  const jsonThinking = createJsonStringFieldStreamer("thinking", (text) => {
+    if (nativeReasoningSeen) return;
+    streamedJsonThinking = true;
+    emit(text);
+  });
+  const onReason = (text) => {
+    nativeReasoningSeen = true;
+    emit(text);
+  };
+  const onContent = (text) => {
+    if (!nativeReasoningSeen) jsonThinking.push(text);
+  };
 
   // Initial call.
-  let r = await streamOnce({ apiKey, model, messages, onReason: emit, think, signal, baseUrl, withReasoning });
+  emit("Planning the response and Roblox actions…\n");
+  status(think === "fast" ? "Thinking fast…" : "Thinking…");
+  let r = await streamOnce({ apiKey, model, messages, onReason, onContent, think, signal, baseUrl, withReasoning });
   content += r.content;
   reasoning += r.reasoning;
   if (r.actualModel) actualModel = r.actualModel;
@@ -929,7 +1041,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
         "any text already sent and do not restart the object — just resume the " +
         "raw characters." },
     ];
-    r = await streamOnce({ apiKey, model, messages: followUp, onReason: emit, think, signal, baseUrl, withReasoning });
+    r = await streamOnce({ apiKey, model, messages: followUp, onReason, onContent, think, signal, baseUrl, withReasoning });
     content += r.content;
     reasoning += r.reasoning;
   }
@@ -953,7 +1065,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   let thinking = reasoning;
   if (!thinking && typeof parsed.thinking === "string") {
     thinking = parsed.thinking;
-    emit(thinking);
+    if (!streamedJsonThinking) emit(thinking);
   }
   return {
     thinking,
@@ -992,8 +1104,8 @@ function sanitizePlan(p) {
 
 // This is the complete model catalog. IDs match the Railway gateway exactly.
 const AVAILABLE_MODELS = [
-  { id: "gpt-5-6-sol", label: "GPT-5.6 Sol (recommended) — 100 credits", family: "openai", cost: 100, gated: false },
-  { id: "gpt-5-6-terra", label: "GPT-5.6 Terra — 100 credits", family: "openai", cost: 100, gated: false },
+  { id: "gpt-5-6-terra", label: "GPT-5.6 Terra (fast default) — 100 credits", family: "openai", cost: 100, gated: false },
+  { id: "gpt-5-6-sol", label: "GPT-5.6 Sol (complex builds) — 100 credits", family: "openai", cost: 100, gated: false },
   { id: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna — 100 credits", family: "openai", cost: 100, gated: false },
   { id: "claude-opus-5", label: "Claude Opus 5 — 100 credits", family: "anthropic", cost: 100, gated: false },
   { id: "fable-5", label: "Fable 5 — 100 credits", family: "anthropic", cost: 100, gated: false },
