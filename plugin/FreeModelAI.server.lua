@@ -1,7 +1,7 @@
 --!nonstrict
 -- Spider AI — Roblox Studio plugin
 -- Links to the Spider website and lets the AI build in your game.
--- Version 2.2.0 — stronger GUI/model construction and instance references.
+-- Version 2.2.1 — accepts full create destinations and slash-separated paths.
 --
 -- Install: put this file in your Studio Plugins folder
 --   (Studio: right-click in the Explorer's Plugins, or use the menu
@@ -13,7 +13,7 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 local InsertService = game:GetService("InsertService")
 
-local PLUGIN_VERSION = "2.2.0"
+local PLUGIN_VERSION = "2.2.1"
 local DEFAULT_BACKEND_URL = "https://spider-web-ju2g.onrender.com"
 local SETTINGS_URL = "Spider_BackendUrl"
 local SETTINGS_TOKEN = "Spider_PluginToken"
@@ -825,6 +825,9 @@ end
 -- Resolve a dotted path starting from game. Falls back to name-based search.
 local function resolvePath(path)
 	if not path or path == "" then return workspace end
+	path = tostring(path):gsub("\\", "."):gsub("/", ".")
+		:gsub("^%.+", ""):gsub("%.+$", ""):gsub("%.+", ".")
+		:gsub("^game%.", "")
 
 	local function descendantNamed(root, name)
 		for _, d in ipairs(root:GetDescendants()) do
@@ -1015,13 +1018,22 @@ local function executeAction(a)
 		elseif cls == "ModuleScript" then
 			defaultParent = "ReplicatedStorage"
 		end
+		local requestedParent = tostring(a.parent or a.path or defaultParent)
+			:gsub("\\", "."):gsub("/", ".")
+			:gsub("^%.+", ""):gsub("%.+$", ""):gsub("%.+", ".")
+			:gsub("^game%.", "")
+		local scriptName = tostring(a.name or "AIScript")
+		local destinationLeaf = requestedParent:match("([^.]+)$")
+		if destinationLeaf and destinationLeaf:lower() == scriptName:lower() then
+			requestedParent = requestedParent:match("^(.*)%.") or defaultParent
+		end
 		local parent, parentPath, perr = resolveTarget({
 			targetCode = a.targetCode,
-			parent = a.parent or a.path or defaultParent,
+			parent = requestedParent,
 		})
 		if not parent then return false, "create_script", perr end
 		local s = Instance.new(cls)
-		s.Name = a.name or "AIScript"
+		s.Name = scriptName
 		s.Source = a.source or ""
 		s.Parent = parent
 		Selection:Set({ s })

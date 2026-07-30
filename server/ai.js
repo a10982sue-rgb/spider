@@ -1395,15 +1395,26 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
 export function normalizeActions(actions, options = {}) {
   if (!Array.isArray(actions)) return [];
   const text = (value) => typeof value === "string" ? value.trim() : "";
+  const instancePath = (value) => text(value)
+    .replaceAll("\\", ".")
+    .replaceAll("/", ".")
+    .replace(/^\.+|\.+$/g, "")
+    .replace(/\.{2,}/g, ".")
+    .replace(/^game\./i, "");
+  const createDestination = (value, name) => {
+    const path = instancePath(value);
+    const suffix = name ? `.${name}` : "";
+    return suffix && path.toLowerCase().endsWith(suffix.toLowerCase())
+      ? path.slice(0, -suffix.length)
+      : path;
+  };
   const hasTarget = (action, key) => !!(text(action.targetCode) || text(action[key]));
   const createParent = (action, fallback) => {
-    if (text(action.parent)) return text(action.parent);
-    const path = text(action.path);
     const name = text(action.name);
-    if (path) {
-      const suffix = name ? `.${name}` : "";
-      return suffix && path.endsWith(suffix) ? path.slice(0, -suffix.length) : path;
-    }
+    const parent = createDestination(action.parent, name);
+    if (parent) return parent;
+    const path = createDestination(action.path, name);
+    if (path) return path;
     return fallback;
   };
 
@@ -1485,14 +1496,14 @@ export function normalizeActions(actions, options = {}) {
         out.properties = out.properties && typeof out.properties === "object" ? out.properties : {};
         return out;
       case "set_property":
-        out.path = text(out.path) || text(out.parent);
+        out.path = instancePath(out.path) || instancePath(out.parent);
         out.properties = out.properties && typeof out.properties === "object" ? out.properties : {};
         return hasTarget(out, "path") ? out : null;
       case "delete_instance":
-        out.path = text(out.path) || text(out.parent);
+        out.path = instancePath(out.path) || instancePath(out.parent);
         return hasTarget(out, "path") ? out : null;
       case "edit_script":
-        out.path = text(out.path) || text(out.parent);
+        out.path = instancePath(out.path) || instancePath(out.parent);
         return hasTarget(out, "path") && typeof out.source === "string" ? out : null;
       case "insert_free_model":
       case "insert_free_audio":
@@ -1503,7 +1514,7 @@ export function normalizeActions(actions, options = {}) {
         out.name = text(out.name) || text(out.target);
         return out.name ? out : null;
       case "read_script":
-        out.path = text(out.path) || text(out.parent);
+        out.path = instancePath(out.path) || instancePath(out.parent);
         return hasTarget(out, "path") ? out : null;
       default:
         return null;
