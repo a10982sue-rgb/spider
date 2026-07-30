@@ -69,7 +69,7 @@ short intro explaining the flow; you can reopen it anytime with the **?** button
 
 1. In Roblox Studio: **Plugins ▸ Plugins Folder**.
 2. Click **Download Studio plugin** on the Spider website and copy the
-   downloaded `SpiderAI.server.lua` into that folder.
+   downloaded `SpiderAI.rbxmx` into that folder.
 3. Back in Studio, click **Plugins ▸ FreeModel AI** (or restart Studio). A panel
    docks on the right.
 4. Confirm the **Backend URL** matches your server (`http://localhost:3000`).

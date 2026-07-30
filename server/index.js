@@ -1,4 +1,5 @@
 import express from "express";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -638,11 +639,33 @@ app.post("/api/plugin/chat", async (req, res) => {
 });
 
 // === STATIC SITE ===========================================================
-// Always download the plugin directly from the canonical source file so the
-// website cannot drift behind the version shipped in this repository.
+// Package the canonical Lua source as a Roblox XML model. Studio's local
+// Plugins folder loads .rbxmx/.rbxm models, not raw .lua source files.
 app.get("/download/plugin", (_req, res) => {
   const pluginPath = path.join(__dirname, "..", "plugin", "FreeModelAI.server.lua");
-  res.download(pluginPath, "SpiderAI.server.lua");
+  const source = fs.readFileSync(pluginPath, "utf8").replaceAll("]]>", "]]]]><![CDATA[>");
+  const model = `<?xml version="1.0" encoding="utf-8"?>
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+  <External>null</External>
+  <External>nil</External>
+  <Item class="Script" referent="RBX53A1D3E8B1F047B49A0433C11E88C601">
+    <Properties>
+      <BinaryString name="AttributesSerialize"></BinaryString>
+      <bool name="Disabled">false</bool>
+      <Content name="LinkedSource"><null></null></Content>
+      <string name="Name">Spider AI</string>
+      <token name="RunContext">0</token>
+      <string name="ScriptGuid">{53A1D3E8-B1F0-47B4-9A04-33C11E88C601}</string>
+      <ProtectedString name="Source"><![CDATA[${source}]]></ProtectedString>
+      <int64 name="SourceAssetId">-1</int64>
+      <BinaryString name="Tags"></BinaryString>
+    </Properties>
+  </Item>
+</roblox>
+`;
+  res.type("application/xml");
+  res.set("Content-Disposition", 'attachment; filename="SpiderAI.rbxmx"');
+  res.send(model);
 });
 
 // allow dotfiles so /.well-known/security.txt is served (trust signal).
