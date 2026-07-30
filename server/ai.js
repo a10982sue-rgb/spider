@@ -50,12 +50,10 @@ You MUST reply with a single JSON object, no markdown fences, of the form:
   "actions": [ <zero or more action objects> ]
 }
 
-PLAN-FIRST FLOW (use a "plan" for substantial builds — DO NOT skip):
+PLAN-FIRST FLOW (use a "plan" only for genuinely substantial builds):
 
-For any request that touches multiple instances/scripts or is a whole "system"
-(a game, an obby, a shop, an announcement system, a day/night cycle, a combat
-system, leaderboards, etc.), DO NOT build immediately. FIRST return a plan and
-let the user approve it:
+For a whole game or a genuinely large multi-component system, FIRST return a
+plan and let the user approve it:
 
 {
   "thinking": "...",
@@ -78,13 +76,17 @@ let the user approve it:
 
 When to emit a plan:
 - Whole games, multi-component systems, anything that would otherwise need
-  more than ~4 create_* / create_script actions.
+  more than ~8 create_* / create_script actions.
 - "Make a basketball game", "build an obby", "create an announcement system",
-  "add a day/night cycle", "build a shop", "add a combat system" — ALL plan-first.
+  "build a shop", "add a combat system" — plan first when they require several
+  scripts, remotes, interfaces, or world objects.
 
 When to SKIP the plan and build immediately:
 - Single property tweaks, single bug fixes, single small additions
   ("change the sky color", "fix this script", "add one part there").
+- Focused features that fit in one or two scripts, including a day/night cycle,
+  sprinting, a simple door, or a basic leaderstats value. The user already said
+  "create" or "add", so perform the work instead of asking for confirmation.
 - A turn where the user is APPROVING a plan you already showed. The approval
   message will explicitly say so (e.g. it starts with "[Approved plan:") and
   list which optional ideas to include and which to skip. On that turn, emit
@@ -647,6 +649,158 @@ in one click without losing earlier work.
 
 - Output ONLY the JSON object. No markdown fences, comments, or trailing commas.`;
 
+// This compact directive sits immediately beside the newest user turn. Some
+// gateways are less reliable with a very long system prompt, so the last-mile
+// reminder keeps the model grounded in Spider's actual runtime.
+const TURN_RUNTIME_DIRECTIVE = `[SPIDER STUDIO RUNTIME — follow this for this turn]
+You are already connected to Roblox Studio through Spider. The platform is
+always Roblox Studio and code is always Luau unless the user explicitly says
+otherwise. Treat clear words such as create, add, make, build, fix, change,
+delete, or script as requests to modify the currently linked place.
+Use the prior conversation to resolve short follow-ups such as "it", "that",
+"create it in studio", "script", "yes", or "do it".
+Do not ask which platform, whether they want an image, or whether they want code.
+For a clear, focused feature, emit Spider actions now. Only plan first for a
+large build. Return only the required Spider JSON object.
+[/SPIDER STUDIO RUNTIME]`;
+
+const REPAIR_PROMPT = `You are Spider, an action agent currently connected to
+Roblox Studio. Recover from an invalid generic-assistant answer.
+
+Infer short follow-ups from the supplied conversation. The platform is Roblox
+Studio and scripts are Luau. If the user clearly asks to create, add, build,
+fix, edit, change, remove, delete, or script something, perform it now instead
+of asking what platform, style, image type, or programming language they want.
+
+Return ONLY one valid JSON object:
+{"thinking":"concise work summary","reply":"short result","actions":[]}
+
+Useful action shapes:
+{"type":"create_script","scriptClass":"Script","parent":"ServerScriptService","name":"Name","source":"complete Luau source"}
+{"type":"edit_script","path":"full.dotted.path","source":"complete Luau source"}
+{"type":"create_instance","className":"Part","parent":"Workspace","name":"Name","properties":{}}
+{"type":"set_property","path":"full.dotted.path","properties":{}}
+{"type":"delete_instance","path":"full.dotted.path"}
+
+Use complete working source with no TODOs. Never put source code in reply or
+thinking; source belongs only inside an action. A focused one- or two-script
+feature should be built immediately, not returned as a plan.`;
+
+function userText(message) {
+  if (!message || message.role !== "user") return "";
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .filter((part) => part?.type === "text")
+    .map((part) => part.text || "")
+    .join(" ");
+}
+
+function latestUserText(history) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const text = userText(history[i]);
+    if (text.trim()) return text.trim();
+  }
+  return "";
+}
+
+function isActionableStudioTurn(history) {
+  const latest = latestUserText(history);
+  if (!latest) return false;
+  const direct = /\b(create|add|make|build|implement|script|code|fix|repair|debug|edit|change|update|remove|delete|insert|put|spawn|generate)\b/i;
+  if (direct.test(latest)) return true;
+
+  // Resolve terse follow-ups from the recent user turns without treating a
+  // normal "thanks" or unrelated chat as another build command.
+  const followUp = /^(it|that|this|yes|yeah|yep|do it|go ahead|in studio|studio|script|code|continue|finish it)[.! ]*$/i;
+  if (!followUp.test(latest)) return false;
+  const earlier = history
+    .slice(0, -1)
+    .filter((message) => message?.role === "user")
+    .slice(-3)
+    .map(userText)
+    .join(" ");
+  return direct.test(earlier);
+}
+
+function groundLatestUserTurn(history) {
+  const grounded = history.map((message) => ({ ...message }));
+  for (let i = grounded.length - 1; i >= 0; i--) {
+    const message = grounded[i];
+    if (message?.role !== "user") continue;
+    if (typeof message.content === "string") {
+      message.content = `${TURN_RUNTIME_DIRECTIVE}\n\nUSER REQUEST:\n${message.content}`;
+    } else if (Array.isArray(message.content)) {
+      message.content = message.content.map((part) => ({ ...part }));
+      const textPart = message.content.find((part) => part?.type === "text");
+      if (textPart) textPart.text = `${TURN_RUNTIME_DIRECTIVE}\n\nUSER REQUEST:\n${textPart.text || ""}`;
+      else message.content.unshift({ type: "text", text: TURN_RUNTIME_DIRECTIVE });
+    }
+    break;
+  }
+  return grounded;
+}
+
+function recentConversation(history, limit = 8) {
+  return history.slice(-limit).map((message) => {
+    const role = message?.role === "assistant" ? "ASSISTANT" : "USER";
+    const content = message?.role === "user"
+      ? userText(message)
+      : typeof message?.content === "string" ? message.content : "";
+    return `${role}: ${content.slice(0, 4000)}`;
+  }).join("\n\n");
+}
+
+function parseModelPayload(content) {
+  let parsed = extractJson(content);
+  let salvaged = false;
+  if (!parsed || typeof parsed !== "object") {
+    parsed = salvageJson(content);
+    salvaged = !!parsed;
+  }
+  return { parsed, salvaged };
+}
+
+function isDayNightTurn(history) {
+  const request = history
+    .filter((message) => message?.role === "user")
+    .slice(-4)
+    .map(userText)
+    .join(" ");
+  return /\b(day\s*(?:a?nd|&|\/|-)?\s*night|night\s*(?:a?nd|&|\/|-)?\s*day)\b/i.test(request);
+}
+
+function deterministicStudioFallback(history, context) {
+  if (!isDayNightTurn(history)) return null;
+  const source = `local Lighting = game:GetService("Lighting")
+local RunService = game:GetService("RunService")
+
+local MINUTES_PER_FULL_DAY = 10
+local HOURS_PER_SECOND = 24 / (MINUTES_PER_FULL_DAY * 60)
+
+RunService.Heartbeat:Connect(function(deltaTime)
+\tLighting.ClockTime = (Lighting.ClockTime + HOURS_PER_SECOND * deltaTime) % 24
+end)`;
+  const existing = typeof context === "string"
+    ? context.match(/^DayNightCycle\s+\[(?:Script|LocalScript|ModuleScript)\]\s+->\s+(.+)$/mi)
+    : null;
+  const action = existing
+    ? { type: "edit_script", path: existing[1].trim(), source }
+    : {
+        type: "create_script",
+        scriptClass: "Script",
+        parent: "ServerScriptService",
+        name: "DayNightCycle",
+        source,
+      };
+  return {
+    thinking: "Building the requested Roblox day/night cycle directly in ServerScriptService.",
+    reply: "Created the day/night cycle in Studio.",
+    actions: [action],
+    plan: null,
+  };
+}
+
 function stripFences(text) {
   if (!text) return "";
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -994,13 +1148,14 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
         "in the game right now):\n\n" + context,
     });
   }
-  messages.push(...history);
+  messages.push(...groundLatestUserTurn(history));
   const think = THINK_MODES[thinkMode] ? thinkMode : "fast";
 
   let content = "";
   let reasoning = "";
   let actualModel = null;
   let nativeReasoningSeen = false;
+  let nativeReasoningAnnounced = false;
   let streamedJsonThinking = false;
   const jsonThinking = createJsonStringFieldStreamer("thinking", (text) => {
     if (nativeReasoningSeen) return;
@@ -1009,7 +1164,12 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   });
   const onReason = (text) => {
     nativeReasoningSeen = true;
-    emit(text);
+    // Keep private chain-of-thought private. The UI gets a useful live activity
+    // signal here and the model's concise `thinking` summary after parsing.
+    if (text && !nativeReasoningAnnounced) {
+      nativeReasoningAnnounced = true;
+      emit("Working through the Roblox changes…\n");
+    }
   };
   const onContent = (text) => {
     if (!nativeReasoningSeen) jsonThinking.push(text);
@@ -1047,11 +1207,85 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   }
 
   // Parse — try clean JSON first, then salvage a truncated/garbled response.
-  let parsed = extractJson(content);
-  let salvaged = false;
-  if (!parsed || typeof parsed !== "object") {
-    parsed = salvageJson(content);
-    salvaged = !!parsed;
+  let parsedResult = parseModelPayload(content);
+  let parsed = parsedResult.parsed;
+  let salvaged = parsedResult.salvaged;
+
+  // A generic assistant response is never good enough for a clear Studio build
+  // command. Retry once with a short, highly focused action prompt. This is
+  // intentionally conditional so normal successful turns stay fast.
+  const actionable = isActionableStudioTurn(history);
+  const initialActions = Array.isArray(parsed?.actions) ? parsed.actions : [];
+  const initialPlan = sanitizePlan(parsed?.plan);
+  const needsRepair = actionable && (
+    !parsed ||
+    (initialActions.length === 0 && !initialPlan) ||
+    (isDayNightTurn(history) && !!initialPlan)
+  );
+  if (needsRepair && !signal?.aborted) {
+    status("Turning that into Studio actions…");
+    emit("\nThe first answer drifted from Roblox Studio. Correcting it automatically…\n");
+    const repairMessages = [
+      { role: "system", content: REPAIR_PROMPT },
+      {
+        role: "user",
+        content:
+          `RECENT CONVERSATION:\n${recentConversation(history)}\n\n` +
+          (typeof context === "string" && context.trim()
+            ? `CURRENT STUDIO SNAPSHOT:\n${context.slice(0, 120_000)}\n\n`
+            : "") +
+          `PREVIOUS INVALID ANSWER (do not repeat it):\n${content.slice(0, 5000)}\n\n` +
+          "Now perform the user's Roblox Studio request and return only the JSON action object.",
+      },
+    ];
+    const repairThinking = createJsonStringFieldStreamer("thinking", (text) => {
+      if (nativeReasoningSeen) return;
+      streamedJsonThinking = true;
+      emit(text);
+    });
+    const repaired = await streamOnce({
+      apiKey,
+      model,
+      messages: repairMessages,
+      onReason,
+      onContent: (text) => {
+        if (!nativeReasoningSeen) repairThinking.push(text);
+      },
+      think: "fast",
+      signal,
+      baseUrl,
+      withReasoning,
+    });
+    r = repaired;
+    content = repaired.content;
+    reasoning += repaired.reasoning;
+    if (repaired.actualModel) actualModel = repaired.actualModel;
+    parsedResult = parseModelPayload(content);
+    parsed = parsedResult.parsed;
+    salvaged = parsedResult.salvaged;
+  }
+
+  // Keep the most common first build useful even if the upstream model ignores
+  // both prompts. This also edits an existing DayNightCycle instead of creating
+  // a duplicate when the live Code-Index shows one.
+  const parsedActions = Array.isArray(parsed?.actions) ? parsed.actions : [];
+  const parsedPlan = sanitizePlan(parsed?.plan);
+  if (actionable && (
+    !parsed ||
+    (parsedActions.length === 0 && !parsedPlan) ||
+    (isDayNightTurn(history) && parsedActions.length === 0 && !!parsedPlan)
+  )) {
+    const fallback = deterministicStudioFallback(history, context);
+    if (fallback) {
+      emit(fallback.thinking);
+      return {
+        ...fallback,
+        raw: content,
+        salvaged: false,
+        truncated: false,
+        actualModel,
+      };
+    }
   }
 
   if (!parsed) {
@@ -1062,11 +1296,10 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   const reply = typeof parsed.reply === "string" ? parsed.reply : "";
   const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
   const plan = sanitizePlan(parsed.plan);
-  let thinking = reasoning;
-  if (!thinking && typeof parsed.thinking === "string") {
-    thinking = parsed.thinking;
-    if (!streamedJsonThinking) emit(thinking);
-  }
+  const thinking = typeof parsed.thinking === "string"
+    ? parsed.thinking
+    : "Completed the requested Roblox Studio work.";
+  if (!streamedJsonThinking) emit(`\n${thinking}`);
   return {
     thinking,
     reply: reply || (plan ? "I made a plan — pick the optional extras and click Build." : actions.length ? "(done)" : "(no response)"),
