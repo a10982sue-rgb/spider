@@ -1,7 +1,7 @@
 --!nonstrict
 -- Spider AI — Roblox Studio plugin
 -- Links to the Spider website and lets the AI build in your game.
--- Version 2.0.1 — packaged local plugin + production-ready defaults.
+-- Version 2.0.2 — fixed connection UI + scrollable layout.
 --
 -- Install: put this file in your Studio Plugins folder
 --   (Studio: right-click in the Explorer's Plugins, or use the menu
@@ -13,7 +13,7 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 local InsertService = game:GetService("InsertService")
 
-local PLUGIN_VERSION = "2.0.1"
+local PLUGIN_VERSION = "2.0.2"
 local DEFAULT_BACKEND_URL = "https://spider-web-ju2g.onrender.com"
 local SETTINGS_URL = "Spider_BackendUrl"
 local SETTINGS_TOKEN = "Spider_PluginToken"
@@ -102,10 +102,15 @@ local widget = plugin:CreateDockWidgetPluginGui(
 )
 widget.Title = "Spider AI"
 
-local root = make("Frame", {
+local root = make("ScrollingFrame", {
 	Size = UDim2.fromScale(1, 1),
 	BackgroundColor3 = C.BG_ROOT,
 	BorderSizePixel = 0,
+	CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	ScrollingDirection = Enum.ScrollingDirection.Y,
+	ScrollBarThickness = 5,
+	ScrollBarImageColor3 = C.BORDER_H,
 }, widget)
 make("UIPadding", {
 	PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
@@ -202,14 +207,22 @@ local function connBtn(text, order, accent)
 	return b
 end
 
-connLabel("Backend URL")
+local backendLabel = connLabel("Backend URL")
+backendLabel.LayoutOrder = 1
+backendLabel.Parent = connCard
 local urlBox = connInput(DEFAULT_BACKEND_URL, 2)
 urlBox.Text = backendUrl
+urlBox.Parent = connCard
 
-connLabel("Pairing code (from website)")
+local pairingLabel = connLabel("Pairing code (from website)")
+pairingLabel.LayoutOrder = 3
+pairingLabel.Parent = connCard
 local codeBox = connInput("123456", 4)
+codeBox.Parent = connCard
 local linkBtn = connBtn("Link this place", 5, true)
+linkBtn.Parent = connCard
 local unlinkBtn = connBtn("Unlink", 6, false)
+unlinkBtn.Parent = connCard
 
 -- Chat card
 local chatCard = card({ Order = 3, Pad = 10, List = 6 })
@@ -1043,6 +1056,12 @@ local function refreshLinkedUI()
 		setStatus("Not linked", C.TEXT_2)
 		setStatusDot(C.TEXT_3)
 	end
+
+	local linked = pluginToken ~= nil and linkVerified
+	pairingLabel.Visible = not linked
+	codeBox.Visible = not linked
+	linkBtn.Visible = not linked
+	unlinkBtn.Visible = pluginToken ~= nil
 end
 
 -- Asks the server whether our stored token is still valid. The plugin used to
