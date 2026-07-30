@@ -347,6 +347,9 @@ create_instance { className: "TextLabel",
 - X Do NOT create GUIs in Workspace — ScreenGuis go in StarterGui
 - X Do NOT insert free-model GUI kits unless the user explicitly asks for one
 - X Do NOT use SurfaceGui unless the user specifically asked for an in-world GUI
+- X Do NOT generate the entire visual hierarchy inside LocalScript source;
+  emit create_instance actions for the ScreenGui, frames, text, and buttons,
+  then use a small LocalScript only for interaction behavior
 
 ## MODEL CONSTRUCTION REFERENCE
 
@@ -375,7 +378,7 @@ Example create sequence:
   relative to it.
 - Offsets: if base is at [bx, by, bz] with size [bsx, bsy, bsz]:
   - Part on top:    [bx, by + bsy/2 + partYSize/2, bz]
-  - Part in front:  [bx, bz + bsz/2 + partZSize/2, bz]
+  - Part in front:  [bx, by, bz - bsz/2 - partZSize/2]
   - Part to right:  [bx + bsx/2 + partXSize/2, by, bz]
 - For simple static models: set Anchored = true on ALL parts. Unanchored parts
   will fall apart.
@@ -408,7 +411,7 @@ create_instance className "WeldConstraint", parent "Workspace.MyModel.Base",
 - Chassis: Part, Size [6,1,3], Anchored, base position
 - Body: Part, Size [5,1.2,2.8], positioned on top of chassis
 - Cabin: Part, Size [2.5,0.8,2.5], above body rear
-- Wheels x4: CylinderPart each at chassis corners
+- Wheels x4: Parts with Shape "Cylinder", rotated at chassis corners
 - WeldConstraint from chassis to each part
 - PrimaryPart = chassis
 
@@ -663,6 +666,45 @@ Do not ask which platform, whether they want an image, or whether they want code
 For a clear, focused feature, emit Spider actions now. Only plan first for a
 large build. Return only the required Spider JSON object.
 [/SPIDER STUDIO RUNTIME]`;
+
+const GUI_TURN_DIRECTIVE = `GUI QUALITY MODE:
+Build a polished, responsive Roblox ScreenGui—not a rough placeholder.
+- Put ScreenGui directly in StarterGui with ResetOnSpawn=false,
+  IgnoreGuiInset=true, Enabled=true, and ZIndexBehavior="Sibling".
+- Use a transparent full-screen Root frame. Unless the requested surface is an
+  edge HUD/banner/toast, center one main panel with AnchorPoint [0.5,0.5],
+  Position [0.5,0,0.5,0], and a responsive Size around [0.45,0,0.55,0].
+- Use a clear hierarchy: title, supporting text, content, then actions. Keep
+  consistent 8/12/16px spacing, 10–14px corners, subtle strokes, and no text
+  touching edges. Use no more than one primary accent color.
+- Every visible GuiObject needs a nonzero Size. Every text object needs Text,
+  Font, TextSize, TextColor3, TextWrapped, and intentional alignment.
+- Use UIListLayout/UIGridLayout plus UIPadding instead of manually scattering
+  children. Do not set Position on children controlled by a layout.
+- Make the initial state visible and usable. Add complete LocalScript behavior
+  for interactive buttons, close controls, toggles, or live data.
+- Create the visual hierarchy with create_instance actions. Do NOT hide the
+  entire interface inside a LocalScript that calls Instance.new at runtime;
+  scripts should wire behavior to GUI instances that already exist.
+- Check the hierarchy and all UDim2 arrays before returning actions.`;
+
+const MODEL_TURN_DIRECTIVE = `MODEL QUALITY MODE:
+Build one cohesive, presentation-quality Roblox Model—not a pile of blocks.
+- Create the Model first and parent every visual part beneath it.
+- Establish a root/base position, then calculate every other Position from that
+  shared origin. Parts must intentionally touch, overlap, or leave a designed
+  gap; never scatter them at unrelated coordinates.
+- Match real proportions and a readable silhouette. Use 10–30 meaningful parts
+  when the subject benefits from detail, including layered forms, symmetry,
+  trim, and appropriate WedgeParts or Parts with Shape="Cylinder"—not only boxes.
+- Use a restrained material/color palette with purposeful contrast. Set Size,
+  Position, Orientation, Anchored, CanCollide, Material, and Color intentionally
+  on each BasePart.
+- Set a real PrimaryPart after it exists. Static display models stay anchored;
+  functional assemblies use a root plus WeldConstraints whose Part0/Part1 paths
+  point to actual created parts.
+- Inspect the completed action list for parent paths, proportions, symmetry,
+  structural connections, and missing pieces before returning it.`;
 
 const REPAIR_PROMPT = `You are Spider, an action agent currently connected to
 Roblox Studio. Recover from an invalid generic-assistant answer.
@@ -1148,6 +1190,16 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
         "in the game right now):\n\n" + context,
     });
   }
+  const currentRequest = latestUserText(history);
+  const guiTurn = /\b(gui|ui|hud|menu|shop|inventory|scoreboard|health\s*bar|notification|toast|dialog|popup|interface)\b/i.test(currentRequest);
+  const modelTurn = mode === "model" ||
+    /\b(model|prop|car|truck|house|building|sword|weapon|tree|chair|table|statue|vehicle)\b/i.test(currentRequest);
+  if (guiTurn) {
+    messages.push({ role: "system", content: GUI_TURN_DIRECTIVE });
+  }
+  if (modelTurn) {
+    messages.push({ role: "system", content: MODEL_TURN_DIRECTIVE });
+  }
   messages.push(...groundLatestUserTurn(history));
   const think = THINK_MODES[thinkMode] ? thinkMode : "fast";
 
@@ -1217,16 +1269,41 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   const actionable = isActionableStudioTurn(history);
   const initialActions = Array.isArray(parsed?.actions) ? parsed.actions : [];
   const initialPlan = sanitizePlan(parsed?.plan);
+  const actionName = (action) => String(action?.type || action?.action || "").toLowerCase();
+  const initialGuiVisuals = initialActions.filter((action) => {
+    const kind = actionName(action);
+    const className = String(action?.className || "");
+    return (kind === "create_instance" || kind === "create_gui_object") &&
+      !["ScreenGui", "Script", "LocalScript", "ModuleScript"].includes(className);
+  }).length;
+  const initialModelPieces = initialActions.filter((action) => {
+    const kind = actionName(action);
+    const className = String(action?.className || "");
+    return ["create_model", "create_part", "create_wedge_part", "create_cylinder", "create_meshpart"].includes(kind) ||
+      (kind === "create_instance" && ["Model", "Part", "MeshPart", "WedgePart", "CornerWedgePart"].includes(className));
+  }).length;
   const needsRepair = actionable && (
     !parsed ||
     (initialActions.length === 0 && !initialPlan) ||
-    (isDayNightTurn(history) && !!initialPlan)
+    (isDayNightTurn(history) && !!initialPlan) ||
+    (guiTurn && !initialPlan && initialGuiVisuals < 4) ||
+    (modelTurn && !initialPlan && initialModelPieces < 4)
   );
   if (needsRepair && !signal?.aborted) {
     status("Turning that into Studio actions…");
     emit("\nThe first answer drifted from Roblox Studio. Correcting it automatically…\n");
     const repairMessages = [
-      { role: "system", content: REPAIR_PROMPT },
+      {
+        role: "system",
+        content: [
+          REPAIR_PROMPT,
+          guiTurn ? GUI_TURN_DIRECTIVE : "",
+          modelTurn ? MODEL_TURN_DIRECTIVE : "",
+          guiTurn
+            ? "Emit at least eight create_instance actions for the visible GUI hierarchy. Do not construct the visual UI with Instance.new inside script source."
+            : "",
+        ].filter(Boolean).join("\n\n"),
+      },
       {
         role: "user",
         content:
@@ -1294,7 +1371,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
   }
 
   const reply = typeof parsed.reply === "string" ? parsed.reply : "";
-  const actions = normalizeActions(parsed.actions);
+  const actions = normalizeActions(parsed.actions, { mode });
   const plan = sanitizePlan(parsed.plan);
   const thinking = typeof parsed.thinking === "string"
     ? parsed.thinking
@@ -1315,7 +1392,7 @@ export async function runChat({ apiKey, model, history, thinkMode, context, mode
 // Models occasionally omit a destination or use `path` where the plugin action
 // schema expects `parent`. Repair safe omissions here so malformed actions
 // never reach Studio. Actions that cannot be repaired unambiguously are dropped.
-export function normalizeActions(actions) {
+export function normalizeActions(actions, options = {}) {
   if (!Array.isArray(actions)) return [];
   const text = (value) => typeof value === "string" ? value.trim() : "";
   const hasTarget = (action, key) => !!(text(action.targetCode) || text(action[key]));
@@ -1330,10 +1407,52 @@ export function normalizeActions(actions) {
     return fallback;
   };
 
-  return actions.map((action) => {
+  const normalized = actions.map((action) => {
     if (!action || typeof action !== "object" || Array.isArray(action)) return null;
     const out = { ...action };
-    out.type = text(out.type);
+    const requestedType = (text(out.type) || text(out.action)).toLowerCase();
+    const createAliases = {
+      create_model: "Model",
+      create_part: "Part",
+      create_wedge_part: "WedgePart",
+      create_corner_wedge_part: "CornerWedgePart",
+      create_meshpart: "MeshPart",
+      create_attachment: "Attachment",
+      create_weld: "WeldConstraint",
+      create_gui_object: text(out.className) || "Frame",
+    };
+    if (createAliases[requestedType]) {
+      out.type = "create_instance";
+      out.className = createAliases[requestedType];
+    } else if (requestedType === "create_cylinder") {
+      out.type = "create_instance";
+      out.className = "Part";
+      out.properties = {
+        ...(out.properties && typeof out.properties === "object" ? out.properties : {}),
+        Shape: "Cylinder",
+      };
+    } else if (requestedType === "set_primary_part") {
+      out.type = "set_property";
+      out.path = text(out.path) || text(out.model) || text(out.parent);
+      out.properties = {
+        ...(out.properties && typeof out.properties === "object" ? out.properties : {}),
+        PrimaryPart: text(out.primaryPart) || text(out.part) || text(out.value),
+      };
+    } else {
+      out.type = requestedType;
+    }
+
+    // A common gateway variation emits a LuaSourceContainer through
+    // create_instance with properties.Source. Convert it to the canonical
+    // create_script action so source handling and privacy stay consistent.
+    if (
+      out.type === "create_instance" &&
+      ["Script", "LocalScript", "ModuleScript"].includes(text(out.className))
+    ) {
+      out.type = "create_script";
+      out.scriptClass = text(out.className);
+      out.source = typeof out.source === "string" ? out.source : out.properties?.Source;
+    }
 
     switch (out.type) {
       case "create_script": {
@@ -1354,6 +1473,13 @@ export function normalizeActions(actions) {
       }
       case "create_instance":
         out.className = text(out.className) || "Part";
+        if (out.className === "CylinderPart") {
+          out.className = "Part";
+          out.properties = {
+            ...(out.properties && typeof out.properties === "object" ? out.properties : {}),
+            Shape: "Cylinder",
+          };
+        }
         out.name = text(out.name) || out.className;
         out.parent = createParent(out, "Workspace");
         out.properties = out.properties && typeof out.properties === "object" ? out.properties : {};
@@ -1383,6 +1509,218 @@ export function normalizeActions(actions) {
         return null;
     }
   }).filter(Boolean);
+  return polishGeneratedActions(normalized, options);
+}
+
+function polishGeneratedActions(actions, { mode } = {}) {
+  const output = actions.map((action) => ({
+    ...action,
+    properties: action.properties && typeof action.properties === "object"
+      ? { ...action.properties }
+      : action.properties,
+  }));
+  const guiObjects = new Set([
+    "Frame", "ScrollingFrame", "CanvasGroup", "TextLabel", "TextButton",
+    "TextBox", "ImageLabel", "ImageButton", "ViewportFrame", "VideoFrame",
+  ]);
+  const textObjects = new Set(["TextLabel", "TextButton", "TextBox"]);
+  const buttonObjects = new Set(["TextButton", "ImageButton"]);
+  const baseParts = new Set([
+    "Part", "MeshPart", "UnionOperation", "WedgePart", "CornerWedgePart",
+    "TrussPart", "Seat", "VehicleSeat", "SpawnLocation",
+  ]);
+  const pathOf = (action) => `${action.parent}.${action.name}`;
+  const validUdim2 = (value) =>
+    Array.isArray(value) &&
+    value.length >= 4 &&
+    value.slice(0, 4).every(Number.isFinite);
+  const nonzeroSize = (value) =>
+    validUdim2(value) &&
+    (Math.abs(value[0]) > 0 || Math.abs(value[1]) >= 2) &&
+    (Math.abs(value[2]) > 0 || Math.abs(value[3]) >= 2);
+  const visiblePosition = (value) =>
+    validUdim2(value) &&
+    value[0] >= 0 && value[0] <= 1 &&
+    value[2] >= 0 && value[2] <= 1 &&
+    Math.abs(value[1]) <= 2000 && Math.abs(value[3]) <= 2000;
+
+  const screenPaths = new Set();
+  const modelPaths = [];
+  for (const action of output) {
+    if (action.type !== "create_instance") continue;
+    if (action.className === "ScreenGui") {
+      action.parent = "StarterGui";
+      action.properties = {
+        ...action.properties,
+        ResetOnSpawn: false,
+        Enabled: true,
+        IgnoreGuiInset: true,
+        ZIndexBehavior: "Sibling",
+      };
+      screenPaths.add(pathOf(action));
+    } else if (action.className === "Model") {
+      modelPaths.push(pathOf(action));
+    }
+  }
+
+  // Model mode is one self-contained asset. Pull stray primitives the model
+  // placed directly in Workspace into its sole container.
+  if (mode === "model" && modelPaths.length === 1) {
+    const modelPath = modelPaths[0];
+    const modelName = modelPath.split(".").pop();
+    for (const action of output) {
+      if (
+        action.type === "create_instance" &&
+        baseParts.has(action.className)
+      ) {
+        const parent = String(action.parent || "");
+        const canonicalParent = parent.replace(/^workspace(?=\.|$)/i, "Workspace");
+        if (
+          canonicalParent === "Workspace" ||
+          canonicalParent.toLowerCase() === modelName.toLowerCase() ||
+          !canonicalParent.toLowerCase().startsWith(modelPath.toLowerCase())
+        ) {
+          action.parent = modelPath;
+        } else {
+          action.parent = canonicalParent;
+        }
+      }
+    }
+    for (const action of output) {
+      if (
+        action.type === "set_property" &&
+        String(action.path || "").toLowerCase() === modelName.toLowerCase()
+      ) {
+        action.path = modelPath;
+      }
+    }
+  }
+
+  const mainPanels = [];
+  const guiRootPaths = new Set();
+  for (const action of output) {
+    if (action.type !== "create_instance") continue;
+    const props = action.properties || (action.properties = {});
+    const underStarterGui = action.parent === "StarterGui" || action.parent.startsWith("StarterGui.");
+    if (underStarterGui && guiObjects.has(action.className)) {
+      const hadUsableSize = nonzeroSize(props.Size);
+      if (!hadUsableSize) {
+        if (textObjects.has(action.className)) props.Size = [1, 0, 0, 36];
+        else if (action.className.startsWith("Image")) props.Size = [0, 64, 0, 64];
+        else props.Size = [1, 0, 0, 48];
+      }
+      if ("BorderSizePixel" in props === false && !action.className.startsWith("Image")) {
+        props.BorderSizePixel = 0;
+      }
+
+      const directScreenChild = screenPaths.has(action.parent);
+      const rootLike = /^(root|canvas|container)$/i.test(action.name);
+      const edgeSurface = /(banner|toast|notification|hud|health|score|hotbar|minimap)/i.test(action.name);
+      if (directScreenChild && rootLike) {
+        props.AnchorPoint = [0, 0];
+        props.Position = [0, 0, 0, 0];
+        props.Size = [1, 0, 1, 0];
+        props.BackgroundTransparency = 1;
+        guiRootPaths.add(pathOf(action));
+      } else if (directScreenChild || guiRootPaths.has(action.parent)) {
+        if (!edgeSurface || !visiblePosition(props.Position)) {
+          props.AnchorPoint = [0.5, 0.5];
+          props.Position = [0.5, 0, 0.5, 0];
+        }
+        if (!hadUsableSize) props.Size = [0.45, 0, 0.55, 0];
+        if (props.BackgroundColor3 == null) props.BackgroundColor3 = [0.055, 0.065, 0.085];
+        if (props.BackgroundTransparency == null || props.BackgroundTransparency > 0.5) {
+          props.BackgroundTransparency = 0.08;
+        }
+        mainPanels.push(pathOf(action));
+      }
+
+      if (textObjects.has(action.className)) {
+        if (typeof props.Text !== "string") props.Text = action.name.replace(/([a-z])([A-Z])/g, "$1 $2");
+        if (props.Font == null) props.Font = action.className === "TextButton" ? "GothamBold" : "GothamMedium";
+        if (props.TextSize == null && props.TextScaled !== true) props.TextSize = 16;
+        if (props.TextColor3 == null) props.TextColor3 = [0.94, 0.96, 1];
+        if (props.TextWrapped == null) props.TextWrapped = true;
+        if (props.TextXAlignment == null) props.TextXAlignment = "Left";
+        if (action.className !== "TextButton" && props.BackgroundTransparency == null) {
+          props.BackgroundTransparency = 1;
+        }
+      }
+      if (buttonObjects.has(action.className)) {
+        if (props.AutoButtonColor == null) props.AutoButtonColor = true;
+        if (props.BackgroundColor3 == null) props.BackgroundColor3 = [0, 0.62, 1];
+        if (props.BackgroundTransparency == null) props.BackgroundTransparency = 0.08;
+      }
+    }
+
+    if (baseParts.has(action.className) && modelPaths.some((path) => action.parent === path || action.parent.startsWith(`${path}.`))) {
+      if (mode === "model" && props.Anchored == null) props.Anchored = true;
+      if (props.Material == null) props.Material = "SmoothPlastic";
+      if (props.CastShadow == null) props.CastShadow = true;
+    }
+  }
+
+  // Guarantee baseline polish and phone/desktop bounds on top-level panels.
+  for (const panelPath of mainPanels) {
+    const has = (className) => output.some((action) =>
+      action.type === "create_instance" &&
+      action.className === className &&
+      action.parent === panelPath
+    );
+    if (!has("UICorner")) {
+      output.push({
+        type: "create_instance",
+        className: "UICorner",
+        parent: panelPath,
+        name: "SpiderCorner",
+        properties: { CornerRadius: [0, 12] },
+      });
+    }
+    if (!has("UIStroke")) {
+      output.push({
+        type: "create_instance",
+        className: "UIStroke",
+        parent: panelPath,
+        name: "SpiderStroke",
+        properties: { Thickness: 1, Color: [0.65, 0.75, 0.9], Transparency: 0.72 },
+      });
+    }
+    if (!has("UISizeConstraint")) {
+      output.push({
+        type: "create_instance",
+        className: "UISizeConstraint",
+        parent: panelPath,
+        name: "SpiderSizeConstraint",
+        properties: { MinSize: [280, 180], MaxSize: [760, 680] },
+      });
+    }
+  }
+
+  // Every created model gets a usable PrimaryPart unless the model already set
+  // one itself. Prefer a semantic root and otherwise use its first BasePart.
+  for (const modelPath of modelPaths) {
+    const alreadySet = output.some((action) =>
+      action.type === "set_property" &&
+      action.path === modelPath &&
+      action.properties?.PrimaryPart != null
+    );
+    if (alreadySet) continue;
+    const candidates = output.filter((action) =>
+      action.type === "create_instance" &&
+      baseParts.has(action.className) &&
+      (action.parent === modelPath || action.parent.startsWith(`${modelPath}.`))
+    );
+    const primary = candidates.find((action) => /^(root|base|body|chassis|floor|handle)$/i.test(action.name))
+      || candidates[0];
+    if (primary) {
+      output.push({
+        type: "set_property",
+        path: modelPath,
+        properties: { PrimaryPart: pathOf(primary) },
+      });
+    }
+  }
+  return output;
 }
 
 // Coerce a model-emitted plan into a known shape. Returns null if the object

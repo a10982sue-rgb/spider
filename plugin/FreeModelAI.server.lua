@@ -1,7 +1,7 @@
 --!nonstrict
 -- Spider AI — Roblox Studio plugin
 -- Links to the Spider website and lets the AI build in your game.
--- Version 2.1.2 — repairs missing action destinations before execution.
+-- Version 2.2.0 — stronger GUI/model construction and instance references.
 --
 -- Install: put this file in your Studio Plugins folder
 --   (Studio: right-click in the Explorer's Plugins, or use the menu
@@ -13,7 +13,7 @@ local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Selection = game:GetService("Selection")
 local InsertService = game:GetService("InsertService")
 
-local PLUGIN_VERSION = "2.1.2"
+local PLUGIN_VERSION = "2.2.0"
 local DEFAULT_BACKEND_URL = "https://spider-web-ju2g.onrender.com"
 local SETTINGS_URL = "Spider_BackendUrl"
 local SETTINGS_TOKEN = "Spider_PluginToken"
@@ -784,6 +784,23 @@ local function v2(t)
 	if typeof(t) == "table" and #t >= 2 then return Vector2.new(t[1], t[2]) end
 	return nil
 end
+local function cf(t)
+	if typeof(t) ~= "table" then return nil end
+	if #t >= 12 then
+		return CFrame.new(
+			t[1], t[2], t[3],
+			t[4], t[5], t[6],
+			t[7], t[8], t[9],
+			t[10], t[11], t[12]
+		)
+	end
+	if #t >= 6 then
+		return CFrame.new(t[1], t[2], t[3])
+			* CFrame.Angles(math.rad(t[4]), math.rad(t[5]), math.rad(t[6]))
+	end
+	if #t >= 3 then return CFrame.new(t[1], t[2], t[3]) end
+	return nil
+end
 -- UDim is {scale, offset}. Accept a number too (treated as pure offset).
 local function ud(v)
 	if typeof(v) == "table" and #v >= 2 then return UDim.new(v[1], v[2]) end
@@ -897,6 +914,31 @@ local PROP_TYPE = {
 	AnchorPoint = "Vector2",
 }
 
+-- Properties that expect another Instance cannot accept the string paths used
+-- in JSON actions directly. Resolve them against the live place first.
+local INSTANCE_REF_PROPS = {
+	PrimaryPart = true,
+	Part0 = true, Part1 = true,
+	Attachment0 = true, Attachment1 = true,
+	Adornee = true,
+}
+
+local function resolveInstanceReference(owner, value)
+	if typeof(value) ~= "string" or value == "" then return nil end
+	local resolved = resolvePath(value)
+	if resolved then return resolved end
+	-- Also accept a child name such as PrimaryPart="Base".
+	if owner:IsA("Model") then
+		local child = owner:FindFirstChild(value, true)
+		if child then return child end
+	end
+	if owner.Parent then
+		local sibling = owner.Parent:FindFirstChild(value, true)
+		if sibling then return sibling end
+	end
+	return nil
+end
+
 local function applyProps(inst, props)
 	if typeof(props) ~= "table" then return end
 	for key, value in pairs(props) do
@@ -907,7 +949,11 @@ local function applyProps(inst, props)
 			if tv == "nil" or tv == "number" or tv == "string" or tv == "boolean" then
 				if PROP_TYPE[key] then tv = PROP_TYPE[key] end
 			end
-			if tv == "UDim2" and typeof(value) == "table" then
+			if INSTANCE_REF_PROPS[key] and typeof(value) == "string" then
+				local ref = resolveInstanceReference(inst, value)
+				if not ref then error("instance reference not found: " .. value) end
+				inst[key] = ref
+			elseif tv == "UDim2" and typeof(value) == "table" then
 				inst[key] = ud2(value) or value
 			elseif tv == "UDim" and (typeof(value) == "table" or typeof(value) == "number") then
 				inst[key] = ud(value) or value
@@ -915,11 +961,17 @@ local function applyProps(inst, props)
 				inst[key] = v2(value) or value
 			elseif tv == "Vector3" and typeof(value) == "table" then
 				inst[key] = v3(value) or value
+			elseif tv == "CFrame" and typeof(value) == "table" then
+				inst[key] = cf(value) or value
 			elseif tv == "Color3" and typeof(value) == "table" then
 				inst[key] = c3(value) or value
 			elseif typeof(inst[key]) == "EnumItem" and typeof(value) == "string" then
-				local enumName = tostring(inst[key].EnumType)
-				inst[key] = (Enum[enumName] :: any)[value]
+				local enumName = tostring(inst[key].EnumType):gsub("^Enum%.", "")
+				local enumType = (Enum :: any)[enumName]
+				if not enumType or not enumType[value] then
+					error("invalid enum value " .. enumName .. "." .. value)
+				end
+				inst[key] = enumType[value]
 			else
 				inst[key] = value
 			end
