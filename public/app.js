@@ -1,6 +1,6 @@
 const API = ""; // same origin as the server
 const $ = (id) => document.getElementById(id);
-const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: null, user: null, mode: "build", webSearch: false, convoId: null, sending: false, abortCtrl: null, userStopped: false, abortShown: false, undoPoint: 0 };
+const state = { linkId: null, linked: false, pollTimer: null, resultTimer: null, attachments: [], credits: Infinity, unlimitedCredits: true, user: null, mode: "build", webSearch: false, convoId: null, sending: false, abortCtrl: null, userStopped: false, abortShown: false, undoPoint: 0 };
 
 // ---- auth gate ------------------------------------------------------------
 // On load: ask who we are. Show the login screen until authenticated, then
@@ -30,7 +30,7 @@ async function init() {
 
   // Logged in — populate account, reveal the app.
   state.user = me.user;
-  setCredits(me.user.credits);
+  setCredits(me.user.credits, me.user.unlimitedCredits);
   $("userName").textContent = me.user.globalName || me.user.username;
   const av = me.user.avatar
     ? `https://cdn.discordapp.com/avatars/${me.user.id}/${me.user.avatar}.png?size=64`
@@ -154,7 +154,20 @@ $("logoutBtn").addEventListener("click", async () => {
 });
 
 // ---- credits --------------------------------------------------------------
-function setCredits(n) {
+function setCredits(n, unlimited = state.unlimitedCredits) {
+  state.unlimitedCredits = unlimited === true;
+  if (state.unlimitedCredits) {
+    state.credits = Infinity;
+    $("creditsNum").textContent = "∞";
+    $("creditsBadgeNum").textContent = "∞";
+    $("creditsLine").classList.remove("low");
+    $("creditsBadge").classList.remove("low");
+    if (!state.sending) $("sendBtn").disabled = false;
+    $("chatInput").placeholder = state.mode === "model"
+      ? "Describe a model to create…  (e.g. a wooden cart, a sci-fi door)"
+      : "Describe what to build…  (Shift + Enter for a new line)";
+    return;
+  }
   if (n === null || n === undefined) return;
   state.credits = n;
   const low = n <= 3;
@@ -206,7 +219,7 @@ function startStatusPolling() {
   state.pollTimer = setInterval(async () => {
     try {
       const s = await get(`/api/session/status?linkId=${state.linkId}`);
-      if (s.credits !== null && s.credits !== undefined) setCredits(s.credits);
+      if (s.credits !== null && s.credits !== undefined) setCredits(s.credits, s.unlimitedCredits);
       if (s.linked && !state.linked) {
         state.linked = true;
         clearInterval(state.pollTimer); state.pollTimer = null;
@@ -526,7 +539,7 @@ async function sendChat(text, displayText, attachments) {
           state.abortShown = true;
         }
       },
-      onDone: ({ reply, plan, queued, thinking, truncated, salvaged, credits, convoId }) => {
+      onDone: ({ reply, plan, queued, thinking, truncated, salvaged, credits, unlimitedCredits, convoId }) => {
         think.finish(thinking);
         statusEl.remove();
         if (plan) {
@@ -534,7 +547,7 @@ async function sendChat(text, displayText, attachments) {
         } else {
           addMsg("ai", reply, queued, null, { truncated, salvaged });
         }
-        if (credits !== undefined) setCredits(credits);
+        if (credits !== undefined) setCredits(credits, unlimitedCredits);
         if (convoId) state.convoId = convoId;
       },
       onError: (msg) => { think.remove(); statusEl.remove(); addMsg("sys", "Error: " + msg); },

@@ -1410,17 +1410,17 @@ function sanitizePlan(p) {
 
 // This is the complete model catalog. IDs match the Railway gateway exactly.
 const AVAILABLE_MODELS = [
-  { id: "gpt-5-6-terra", label: "GPT-5.6 Terra (fast default) — 100 credits", family: "openai", cost: 100, gated: false },
-  { id: "gpt-5-6-sol", label: "GPT-5.6 Sol (complex builds) — 100 credits", family: "openai", cost: 100, gated: false },
-  { id: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna — 100 credits", family: "openai", cost: 100, gated: false },
-  { id: "claude-opus-5", label: "Claude Opus 5 — 100 credits", family: "anthropic", cost: 100, gated: false },
-  { id: "fable-5", label: "Fable 5 — 100 credits", family: "anthropic", cost: 100, gated: false },
-  { id: "qwen3.8-max-preview", label: "Qwen 3.8 Max Preview — 100 credits", family: "qwen", cost: 100, gated: false },
+  { id: "gpt-5-6-terra", label: "GPT-5.6 Terra (fast default) — Unlimited", family: "openai", cost: 0, gated: false },
+  { id: "gpt-5-6-sol", label: "GPT-5.6 Sol (complex builds) — Unlimited", family: "openai", cost: 0, gated: false },
+  { id: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna — Unlimited", family: "openai", cost: 0, gated: false },
+  { id: "claude-opus-5", label: "Claude Opus 5 — Unlimited", family: "anthropic", cost: 0, gated: false },
+  { id: "fable-5", label: "Fable 5 — Unlimited", family: "anthropic", cost: 0, gated: false },
+  { id: "qwen3.8-max-preview", label: "Qwen 3.8 Max Preview — Unlimited", family: "qwen", cost: 0, gated: false },
 ];
 const AVAILABLE_MODEL_IDS = new Set(AVAILABLE_MODELS.map((model) => model.id));
 
 export function modelCost(id) {
-  return AVAILABLE_MODEL_IDS.has(id) ? 100 : 100;
+  return AVAILABLE_MODEL_IDS.has(id) ? 0 : 0;
 }
 
 export function isModelGated() {

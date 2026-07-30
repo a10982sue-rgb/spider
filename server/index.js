@@ -7,16 +7,16 @@ import {
   confirmLink, unlinkByToken, queueActions, drainQueue, setContext, appendContextNote,
 } from "./store.js";
 import {
-  runChat, isAvailableModel, isModelGated, modelCost, streamOnce,
+  runChat, isAvailableModel, isModelGated, streamOnce,
   listAvailableModels,
 } from "./ai.js";
 import {
   registerAuthRoutes, requireUser, currentUser, authConfigured,
 } from "./auth.js";
 import {
-  spendCredit, markIntroSeen, publicUser, getUser, syncUser,
+  markIntroSeen, publicUser, getUser, syncUser,
   ready as usersReady, effectiveRoles, setManualRole, allUsers, reloadAll,
-  markChangelogSeen,
+  markChangelogSeen, UNLIMITED_CREDITS,
 } from "./users.js";
 import {
   ready as convosReady,
@@ -218,6 +218,7 @@ app.get("/api/session/status", (req, res) => {
     model: link.model,
     pending: link.queue.length,
     credits: owner ? owner.credits : null,
+    unlimitedCredits: UNLIMITED_CREDITS,
   });
 });
 
@@ -273,12 +274,6 @@ app.post("/api/chat", async (req, res) => {
   if (isModelGated(link.model) && !roles.tester) {
     return res.status(403).json({ error: `Model '${link.model}' is restricted to testers.` });
   }
-  const cost = modelCost(link.model);
-  // Testers don't pay credits.
-  if (!roles.tester && user.credits < cost) {
-    return res.status(402).json({ error: `not enough credits — this model costs ${cost}`, credits: user.credits, cost });
-  }
-
   const message = (req.body?.message || "").toString();
   const attachments = req.body?.attachments;
   const thinkMode = (req.body?.thinkMode || "medium").toString();
@@ -388,13 +383,7 @@ app.post("/api/chat", async (req, res) => {
     link.history = (await getConversation(user.id, convoId))?.messages.map((m) => ({ role: m.role, content: m.content })) || [];
 
     const queuedIds = buildActions.length ? queueActions(link, buildActions) : [];
-    // Charge per-model credits for the successful generation — unless the user
-    // is a tester (unlimited).
-    let credits = user.credits;
-    if (!roles.tester) {
-      const r = await spendCredit(user.id, cost);
-      credits = r.credits;
-    }
+    const credits = user.credits;
     // Privacy: the plugin runs these actions with its own token. Strip
     // script bodies (and any fenced code blocks the model snuck into prose)
     // from the browser-facing payload.
@@ -403,7 +392,7 @@ app.post("/api/chat", async (req, res) => {
     const safeThinking = redactCodeBlocks(thinking);
     send("done", {
       thinking: safeThinking, reply: safeReply, plan, actions: safeActions, queued: queuedIds.length,
-      truncated, salvaged, credits, convoId,
+      truncated, salvaged, credits, unlimitedCredits: UNLIMITED_CREDITS, convoId,
     });
   } catch (err) {
     // Only treat as a real user-abort if the signal actually fired or the
@@ -589,13 +578,7 @@ app.post("/api/plugin/chat", async (req, res) => {
   if (!link) return;
   if (!link.apiKey) return res.status(400).json({ error: "no API key set on the website yet" });
 
-  // Charge the session owner's credits (same pool as the website).
   const owner = link.ownerId ? getUser(link.ownerId) : null;
-  const ownerRoles = owner ? effectiveRoles(owner) : { tester: false, admin: false };
-  const cost = modelCost(link.model);
-  if (owner && !ownerRoles.tester && owner.credits < cost) {
-    return res.status(402).json({ error: `not enough credits — this model costs ${cost}. Top up on the website.`, credits: owner.credits, cost });
-  }
 
   const message = (req.body?.message || "").toString();
   if (!message.trim()) return res.status(400).json({ error: "empty message" });
@@ -629,10 +612,15 @@ app.post("/api/plugin/chat", async (req, res) => {
     }
     const buildActions = actions.filter((a) => a && a.type);
     const queued = buildActions.length ? queueActions(link, buildActions) : [];
-    let credits;
-    if (owner && !ownerRoles.tester) credits = (await spendCredit(owner.id, cost)).credits;
-    else if (owner) credits = owner.credits;
-    res.json({ thinking, reply, actions: buildActions, queued: queued.length, credits });
+    const credits = owner?.credits;
+    res.json({
+      thinking,
+      reply,
+      actions: buildActions,
+      queued: queued.length,
+      credits,
+      unlimitedCredits: UNLIMITED_CREDITS,
+    });
   } catch (err) {
     res.status(502).json({ error: String(err.message || err) });
   }

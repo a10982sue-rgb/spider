@@ -18,7 +18,7 @@ import {
 import { pathToFileURL } from "node:url";
 import {
   syncUser, grantCredits, setCredits, grantAll, allUsers, reloadAll,
-  STARTING_CREDITS, ready as usersReady,
+  STARTING_CREDITS, UNLIMITED_CREDITS, ready as usersReady,
   setDiscordRoles, setManualRole, effectiveRoles,
 } from "./users.js";
 import {
@@ -162,7 +162,9 @@ function creditsEmbed(target, credits) {
   return new EmbedBuilder()
     .setColor(0xff4d3d)
     .setTitle("🕷️ Spider credits")
-    .setDescription(`**${target}** has **${credits}** / ${STARTING_CREDITS} credits remaining.`);
+    .setDescription(UNLIMITED_CREDITS
+      ? `**${target}** has **unlimited generations**.`
+      : `**${target}** has **${credits}** / ${STARTING_CREDITS} credits remaining.`);
 }
 
 // --- client ----------------------------------------------------------------
@@ -251,7 +253,7 @@ function registerHandlers() {
           ephemeral: true,
           content:
             "Click below to log in with Discord, start a model session, and " +
-            "link the Roblox Studio plugin. You start with " + STARTING_CREDITS + " credits.",
+            "link the Roblox Studio plugin. Every model has unlimited generations.",
           components: [loginRow()],
         });
       }
@@ -260,8 +262,7 @@ function registerHandlers() {
         if (!u) {
           return i.reply({
             ephemeral: true,
-            content: "You haven't logged in yet — do that first to get your " +
-              STARTING_CREDITS + " starting credits.",
+            content: "You haven't logged in yet — log in first to use unlimited generations.",
             components: [loginRow()],
           });
         }
@@ -323,6 +324,9 @@ function registerHandlers() {
         return i.reply({ ephemeral: true, content: `✅ ${cmd === "grantrole" ? "Granted" : "Revoked"} **${role}** for ${target.username}. Effective: \`${active}\`.` });
       }
       if (cmd === "grantall") {
+        if (UNLIMITED_CREDITS) {
+          return i.reply({ ephemeral: true, content: "✅ Everyone already has unlimited generations." });
+        }
         const amount = i.options.getInteger("amount");
         await i.deferReply({ ephemeral: true });
         await reloadAll();
@@ -333,6 +337,16 @@ function registerHandlers() {
         await i.deferReply({ ephemeral: true });
         await reloadAll();
         const all = allUsers();
+        if (UNLIMITED_CREDITS) {
+          const embed = new EmbedBuilder()
+            .setColor(0xff4d3d)
+            .setTitle("🕷️ Spider stats")
+            .addFields(
+              { name: "Registered users", value: String(all.length), inline: true },
+              { name: "Generation access", value: "Unlimited for everyone", inline: true },
+            );
+          return i.editReply({ embeds: [embed] });
+        }
         const total = all.reduce((s, u) => s + (u.credits || 0), 0);
         const broke = all.filter((u) => (u.credits || 0) <= 0).length;
         const top = [...all].sort((a, b) => b.credits - a.credits).slice(0, 5)
@@ -355,6 +369,9 @@ function registerHandlers() {
         const who = target.globalName || target.username;
         if (!u) {
           return i.reply({ ephemeral: true, content: `**${who}** hasn't logged into Spider yet, so they have no account.` });
+        }
+        if (UNLIMITED_CREDITS) {
+          return i.reply({ ephemeral: true, content: `✅ **${who}** has unlimited generations.` });
         }
         if (cmd === "checkcredits") {
           return i.reply({ ephemeral: true, embeds: [creditsEmbed(who, u.credits)] });

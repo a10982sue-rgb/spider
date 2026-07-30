@@ -44,13 +44,12 @@ Optional environment variables:
 The server calls `POST {QWEN_BASE_URL}/v1/chat/completions` — the same
 shape ChatGPT SDK / Cursor / ChatBox use, so any OpenAI-ecosystem base URL works.
 
-## Login & credits (Discord)
+## Login & access (Discord)
 
-Access is gated behind **Discord login**, and each user gets **20 generation
-credits** (1 spent per successful build, shared between the website and the
-in-Studio chat). A companion **Discord bot** (`npm run bot`) lets admins grant or
-reset credits (`/credits grant @user 20`) and lets users check their balance
-(`/mycredits`) or DM the bot for a login link.
+Access is gated behind **Discord login**, and every user has **unlimited
+generations** across every available model on both the website and in-Studio
+chat. The companion **Discord bot** (`npm run bot`) can provide login links and
+administration tools.
 
 **Setup:** follow **[SETUP.md](SETUP.md)** to create the Discord app, get the
 OAuth credentials + bot token, and set the env vars above. Until they're set, the

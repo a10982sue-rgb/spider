@@ -26,6 +26,9 @@ const redisEnabled = !!(REDIS_URL && REDIS_TOKEN);
 const REDIS_HASH = "spider:users";
 
 export const STARTING_CREDITS = 1000;
+// Credits are retained in storage for backwards-compatible admin tooling, but
+// generation access is unlimited for every account.
+export const UNLIMITED_CREDITS = true;
 export { redisEnabled };
 
 let users = new Map(); // discordId -> user record (in-memory cache)
@@ -208,6 +211,7 @@ export async function spendCredit(id, amount = 1) {
   await refresh(id);
   const u = users.get(id);
   if (!u) return { ok: false, credits: 0 };
+  if (UNLIMITED_CREDITS) return { ok: true, credits: u.credits };
   const cost = Math.max(1, Math.floor(amount));
   if (u.credits < cost) return { ok: false, credits: u.credits };
   u.credits -= cost;
@@ -283,6 +287,7 @@ export function publicUser(u) {
     globalName: u.globalName,
     avatar: u.avatar,
     credits: u.credits,
+    unlimitedCredits: UNLIMITED_CREDITS,
     seenIntro: u.seenIntro,
     roles: effectiveRoles(u),
     lastChangelogSeenAt: u.lastChangelogSeenAt || 0,
