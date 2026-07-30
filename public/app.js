@@ -452,7 +452,32 @@ input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("chatForm").requestSubmit(); }
 });
 document.querySelectorAll(".chip").forEach((chip) => {
-  chip.addEventListener("click", () => { input.value = chip.textContent; autoGrow(); input.focus(); });
+  chip.addEventListener("click", () => {
+    input.value = chip.dataset.prompt || chip.textContent.trim();
+    autoGrow();
+    input.focus();
+  });
+});
+
+// Mobile setup drawer.
+const mobileNavBtn = $("mobileNavBtn");
+const mobileSidebarScrim = $("mobileSidebarScrim");
+const setupSidebar = $("setupSidebar");
+
+function setMobileSidebar(open) {
+  setupSidebar.classList.toggle("mobile-open", open);
+  mobileSidebarScrim.hidden = !open;
+  mobileNavBtn.setAttribute("aria-expanded", String(open));
+  document.body.classList.toggle("sidebar-open", open);
+}
+
+mobileNavBtn.addEventListener("click", () => setMobileSidebar(!setupSidebar.classList.contains("mobile-open")));
+mobileSidebarScrim.addEventListener("click", () => setMobileSidebar(false));
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && setupSidebar.classList.contains("mobile-open")) setMobileSidebar(false);
+});
+window.addEventListener("resize", () => {
+  if (window.innerWidth > 880 && setupSidebar.classList.contains("mobile-open")) setMobileSidebar(false);
 });
 
 // ---- chat submit ----------------------------------------------------------
